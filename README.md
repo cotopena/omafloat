@@ -24,13 +24,21 @@ The plugin uses YouTube's **F** shortcut. Start with the player selected, rather
 
 Requires Omarchy's Quickshell plugin system, Hyprland with the Lua dispatcher API (developed against 0.56.2), Python 3, and a Chromium-based browser. Firefox and other video sites are not supported by this version.
 
-Install the bar widget directly from GitHub:
+### Option A: plugin manager (recommended)
 
 ```sh
 omarchy plugin add https://github.com/cotopena/omafloat --enable
 ```
 
-For the optional keyboard shortcut, clone the repository and run the installer:
+This installs and enables the bar widget. It does not add a keyboard shortcut. To add the optional shortcut, run the installer from the installed plugin:
+
+```sh
+python3 ~/.config/omarchy/plugins/io.github.cotopena.omafloat/install.py
+```
+
+The installer keeps the widget where you placed it in the bar. It does not change the plugin-manager files, so `omarchy plugin update io.github.cotopena.omafloat` keeps working.
+
+### Option B: from a clone
 
 ```sh
 git clone https://github.com/cotopena/omafloat
@@ -38,15 +46,7 @@ cd omafloat
 python3 install.py
 ```
 
-The installer changes your shell configuration to enable OmaFloat and adds the shortcut to your Hyprland bindings. It backs up both files before writing them. Installing through the plugin manager does not add a shortcut.
-
-From an existing checkout:
-
-```sh
-python3 install.py
-```
-
-The installer validates the plugin, copies it to `~/.config/omarchy/plugins/io.github.cotopena.omafloat`, enables it in the right bar, and adds the shortcut if it is free. Existing plugin files, shell settings, and bindings are backed up under `~/.local/state/omafloat/backups/`.
+The installer validates the plugin, copies it to `~/.config/omarchy/plugins/io.github.cotopena.omafloat`, enables it (a fresh install goes in the right section of the bar; an existing widget keeps its placement), and adds the Super + Ctrl + Shift + P shortcut to `~/.config/hypr/bindings.lua` if that shortcut is free. Existing plugin files, shell settings, and bindings are backed up under `~/.local/state/omafloat/backups/` before anything is written. To update, pull the clone and run the installer again.
 
 Run the installer while your desktop is unlocked. If the bar retains old code after an upgrade, run:
 
@@ -54,7 +54,7 @@ Run the installer while your desktop is unlocked. If the bar retains old code af
 omarchy restart shell
 ```
 
-No setup is required in `chrome://extensions`. Version 0.2 replaces the old companion-based prototype. The installer preserves the old plugin in its backup and removes the companion files from the installed package. Any browser extension previously loaded manually can be removed separately in Chromium.
+No setup is required in `chrome://extensions`.
 
 ## Marketplace package
 
@@ -65,6 +65,8 @@ Source: [cotopena/omafloat](https://github.com/cotopena/omafloat). The marketpla
 ### Upgrade from Float Video
 
 Return any floating video first. Remove the old `gus.float-video` plugin through the plugin manager. If you installed its keyboard shortcut, remove the block between `-- BEGIN Omarchy Float Video` and `-- END Omarchy Float Video` from `~/.config/hypr/bindings.lua`, then run `hyprctl reload` and `hyprctl configerrors`. Install OmaFloat using either method above. The installer refuses to replace an existing legacy shortcut automatically. Existing backups remain under `~/.local/state/omarchy-float-video/backups/`.
+
+Version 0.2 replaced the old companion-based prototype, and OmaFloat does not use a browser extension. Any extension previously loaded manually for Float Video can be removed separately in Chromium.
 
 ## Behavior and limits
 
