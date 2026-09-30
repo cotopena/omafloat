@@ -70,5 +70,6 @@ if '"version":"0.3.0"' not in ipc.stdout:
     else:
         subprocess.run(["omarchy", "restart", "shell"], check=True)
 print(f"Installed OmaFloat. Backups: {backup}")
-print("Play a YouTube video, then click Float video in the bar. Click Return video to restore it.")
+print("Play a YouTube video, then click the OmaFloat icon in the bar to float it. "
+      "Hover over the icon to see OmaFloat. Click the icon again to restore it.")
 print("Keyboard shortcut: Super+Ctrl+Shift+P. No browser extension setup is needed.")
