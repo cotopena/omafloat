@@ -7,9 +7,10 @@ import qs.Commons
 BarWidget {
   id: root
   moduleName: "io.github.cotopena.omafloat"
-  implicitWidth: root.vertical ? root.barSize : label.implicitWidth + Style.space(18)
+  implicitWidth: root.vertical ? root.barSize : icon.implicitWidth + Style.space(18)
   implicitHeight: root.barSize
   property bool floatingVideo: false
+  readonly property bool tooltipHovered: visible && opacity > 0 && mouseArea.containsMouse
   readonly property string helper: decodeURIComponent(Qt.resolvedUrl("bin/omafloat").toString().replace(/^file:\/\//, ""))
 
   function activate() {
@@ -50,26 +51,23 @@ BarWidget {
     target: "io.github.cotopena.omafloat"
     function toggle(): void { root.activate() }
     function status(): string {
-      return JSON.stringify({version: "0.3.0", active: root.floatingVideo, label: label.text, busy: toggleProcess.running})
+      return JSON.stringify({version: "0.3.0", active: root.floatingVideo, label: root.floatingVideo ? "Return video" : "Float video", iconOnly: true, busy: toggleProcess.running})
     }
   }
 
-  Text {
-    id: label
+  OFloatIcon {
+    id: icon
     anchors.centerIn: parent
-    text: root.vertical ? "▣" : "▣  " + (root.floatingVideo ? "Return video" : "Float video")
-    color: root.bar ? root.bar.barForeground : "white"
-    font.family: root.bar ? root.bar.fontFamily : "sans-serif"
-    font.pixelSize: Style.font.body
-    textFormat: Text.PlainText
+    color: root.bar ? root.bar.barForeground : Color.foreground
   }
 
   MouseArea {
+    id: mouseArea
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
     onClicked: root.activate()
-    onEntered: if (root.bar) root.bar.showTooltip(root, "OmaFloat · " + (root.floatingVideo ? "Return YouTube to its workspace" : "Keep YouTube above your apps"))
+    onEntered: if (root.bar) root.bar.showTooltip(root, "OmaFloat")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 }
