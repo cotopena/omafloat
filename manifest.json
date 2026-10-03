@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.cotopena.omafloat",
   "name": "OmaFloat",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": "Gus",
   "license": "MIT",
   "description": "Float your YouTube window above other apps, then return it with one click. No browser extension required.",
@@ -12,6 +12,7 @@
     "displayName": "OmaFloat",
     "description": "Float a YouTube video above your other apps.",
     "category": "Desktop",
+    "aliases": ["youtube", "video", "pip", "picture-in-picture", "float"],
     "allowMultiple": false,
     "defaultSection": "right"
   }

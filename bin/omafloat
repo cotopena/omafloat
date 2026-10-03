@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import time
+import tempfile
 
 
 def hypr(*args):
@@ -26,7 +27,10 @@ def read_clients():
 
 
 def notify(message):
-    subprocess.run(["notify-send", "OmaFloat", message], check=False, timeout=4)
+    try:
+        subprocess.run(["notify-send", "OmaFloat", message], check=False, timeout=4)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def lua(value):
@@ -41,7 +45,28 @@ def lua(value):
 
 def dispatch(method, **args):
     fields = ",".join(f"{key}={lua(value)}" for key, value in args.items())
-    return hypr("eval", f"hl.dispatch(hl.dsp.{method}({{{fields}}}))")
+    # hyprctl exits 0 for warning-level failures; raise them as Lua errors.
+    return hypr("eval", f"local r = hl.dispatch(hl.dsp.{method}({{{fields}}})); "
+                f"if r and r.ok == false then error({lua(method + ': ')} .. tostring(r.error or r.code), 0) end")
+
+
+def raise_script(client):
+    # Resolve and validate identity inside the same compositor eval as dispatch.
+    # Never use the legacy dispatcher, which can fall back to the focused window.
+    win = lua(selector(client))
+    stable = client.get("stableId")
+    if stable is None or type(client.get("pid")) is not int:
+        raise RuntimeError("Cannot safely identify the floating window.")
+    return (f"local w = hl.get_window({win}); "
+            f"if not w or w.pid ~= {lua(client['pid'])} or tostring(w.stable_id) ~= {lua(str(stable))} "
+            'then error("The floating window closed or changed identity", 0) end; '
+            'if not w.mapped or not w.floating or w.workspace.name == "special:omafloat-hidden" then return end; '
+            f'local r = hl.dispatch(hl.dsp.window.alter_zorder({{window={win},mode="top"}})); '
+            'if r and r.ok == false then error("window.alter_zorder: " .. tostring(r.error or r.code), 0) end')
+
+
+def raise_window(client):
+    return hypr("eval", raise_script(client))
 
 
 def selector(client):
@@ -58,6 +83,10 @@ def send_key(client, key):
          'hl.timer(function() hl.dispatch(hl.dsp.send_key_state({' + fields +
          ',state="up"})) end,{timeout=50,type="oneshot"})')
     time.sleep(0.08)
+
+
+def workspace_selector(workspace):
+    return workspace["id"] if workspace["id"] > 0 else "name:" + workspace["name"]
 
 
 def is_youtube(client):
@@ -95,7 +124,7 @@ def matching_window(saved, clients):
     return None
 
 
-def corner_geometry(monitor, width=600):
+def corner_geometry(monitor, width=600, corner="bottom-right"):
     scale = monitor.get("scale", 1)
     w, h = monitor["width"], monitor["height"]
     if monitor.get("transform", 0) % 2:
@@ -103,10 +132,11 @@ def corner_geometry(monitor, width=600):
     w, h = round(w / scale), round(h / scale)
     left, top, right, bottom = monitor.get("reserved", [0, 0, 0, 0])
     width = min(width, w - left - right - 40, int((h - top - bottom - 40) * 16 / 9))
-    width = max(160, width)
+    if width < 80:
+        raise RuntimeError("Display work area is too small for a video float.")
     height = round(width * 9 / 16)
-    return (monitor["x"] + w - right - width - 20,
-            monitor["y"] + h - bottom - height - 20, width, height)
+    return (monitor["x"] + (left + 20 if corner.endswith("left") else w - right - width - 20),
+            monitor["y"] + (top + 20 if corner.startswith("top") else h - bottom - height - 20), width, height)
 
 
 class Controller:
@@ -129,16 +159,44 @@ class Controller:
                             ("address", "pid", "stableId", "workspace", "floating", "pinned",
                              "fullscreen", "fullscreenClient", "at", "size"))
                     and "monitor_name" in state and "entered_fullscreen" in state):
+                original = state["original"]
+                workspace = original["workspace"]
+                valid_pair = lambda v: (isinstance(v, list) and len(v) == 2
+                                        and all(type(n) in (int, float) and math.isfinite(n) for n in v))
+                options = state.get("options", {})
+                if (not re.fullmatch(r"0x[0-9a-fA-F]+", str(original["address"]))
+                        or not isinstance(workspace, dict) or type(workspace.get("id")) is not int
+                        or not isinstance(workspace.get("name"), str)
+                        or not valid_pair(original["at"]) or not valid_pair(original["size"])
+                        or any(n <= 0 for n in original["size"])
+                        or any(type(original[k]) is not bool for k in ("floating", "pinned"))
+                        or any(type(original[k]) is not int or original[k] not in range(4)
+                               for k in ("fullscreen", "fullscreenClient"))
+                        or not isinstance(state["monitor_name"], str)
+                        or type(state["entered_fullscreen"]) is not bool
+                        or not isinstance(options, dict)
+                        or ("width" in options and (type(options["width"]) is not int or not 320 <= options["width"] <= 1200))
+                        or ("corner" in options and options["corner"] not in {"top-left", "top-right", "bottom-left", "bottom-right"})
+                        or any(k in options and type(options[k]) is not bool for k in ("above", "follow"))):
+                    return None
                 return state
             return None
         except (FileNotFoundError, ValueError):
             return None
 
     def save(self, state):
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(state))
-        temporary.chmod(0o600)
-        temporary.replace(self.path)
+        # A unique 0600 file prevents readers from observing partial JSON or
+        # a predictable temporary path from redirecting writes.
+        with tempfile.NamedTemporaryFile(mode="w", dir=self.directory, prefix=self.path.stem,
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            try:
+                json.dump(state, stream, allow_nan=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+                temporary.replace(self.path)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def clear(self):
         self.path.unlink(missing_ok=True)
@@ -150,17 +208,19 @@ class Controller:
             self.clear()
             return
         win = selector(client)
-        dispatch("window.pin", window=win, action="disable")
+        if client["pinned"]:
+            dispatch("window.pin", window=win, action="disable")
         if state["entered_fullscreen"]:
             send_key(client, "Escape")
-        dispatch("window.fullscreen_state", window=win, action="set", internal=0, client=0)
+        # Clearing client fullscreen would make Chromium leave a player that was already fullscreen.
+        dispatch("window.fullscreen_state", window=win, action="set", internal=0,
+                 client=0 if state["entered_fullscreen"] else original["fullscreenClient"])
         monitors = json.loads(hypr("-j", "monitors"))
         origin = next((m for m in monitors if m["name"] == state["monitor_name"]), None)
         if origin:
             dispatch("window.move", window=win, monitor=origin["name"])
         workspace = original["workspace"]
-        workspace_ref = workspace["id"] if workspace["id"] > 0 else "name:" + workspace["name"]
-        dispatch("window.move", window=win, workspace=workspace_ref, follow=False)
+        dispatch("window.move", window=win, workspace=workspace_selector(workspace), follow=False)
         dispatch("window.float", window=win, action="enable" if original["floating"] else "disable")
         if original["floating"] and origin:
             dispatch("window.resize", window=win, x=original["size"][0], y=original["size"][1], relative=False)
@@ -171,21 +231,41 @@ class Controller:
                  value="1" if state.get("sync_fullscreen", True) else "0")
         if original["pinned"]:
             dispatch("window.pin", window=win, action="enable")
+        current = matching_window(original, read_clients())
+        if current is None:
+            self.clear()
+            return
+        key = "id" if workspace["id"] > 0 else "name"
+        # Pinning moves a window to its monitor's active workspace; only an unpinned one has a fixed workspace.
+        geometry_failed = bool(origin and original["floating"] and (
+            any(abs(a - b) > 2 for a, b in zip(current["at"], original["at"])) or
+            any(abs(a - b) > 2 for a, b in zip(current["size"], original["size"]))))
+        if (geometry_failed or (origin and current["monitor"] != origin["id"])
+                or current["fullscreen"] != original["fullscreen"]
+                or current["fullscreenClient"] != original["fullscreenClient"]
+                or current["floating"] != original["floating"] or current["pinned"] != original["pinned"]
+                or (not original["pinned"] and current["workspace"][key] != workspace[key])):
+            raise RuntimeError("YouTube did not return to its previous layout. Choose Restore original window to retry.")
         self.clear()
 
     def enter(self, target, width):
         monitors = json.loads(hypr("-j", "monitors"))
         active = json.loads(hypr("-j", "activewindow"))
-        origin = next(m for m in monitors if m["id"] == target["monitor"])
+        origin = next((m for m in monitors if m["id"] == target["monitor"]), None)
+        if origin is None:
+            raise RuntimeError("Could not find the display for YouTube.")
         monitor = next((m for m in monitors if m.get("focused")), origin)
         state = {"version": 2, "original": target, "monitor_name": origin["name"],
                  "sync_fullscreen": hypr("getprop", selector(target), "sync_fullscreen") == "true",
-                 "entered_fullscreen": target.get("fullscreenClient", 0) != 2}
+                 "entered_fullscreen": target.get("fullscreenClient", 0) != 2,
+                 "options": {"width": width, "corner": "bottom-right", "follow": True, "above": True}}
         self.save(state)
         win = selector(target)
         try:
-            dispatch("window.pin", window=win, action="disable")
-            dispatch("window.move", window=win, workspace=monitor["activeWorkspace"]["id"], follow=False)
+            if target["pinned"]:
+                dispatch("window.pin", window=win, action="disable")
+            dispatch("window.move", window=win, workspace=workspace_selector(monitor["activeWorkspace"]),
+                     follow=False)
             dispatch("focus", window=win)
             if state["entered_fullscreen"]:
                 dispatch("window.set_prop", window=win, prop="sync_fullscreen", value="1")
@@ -218,53 +298,178 @@ class Controller:
                 self.restore(state)
             except Exception as restore_error:
                 raise RuntimeError(
-                    f"{error} Return failed: {restore_error}. Click Return video to retry."
+                    f"{error} Return failed: {restore_error}. Choose Restore original window to retry."
                 ) from error
             raise
         finally:
-            if active.get("address") and active["address"] != target["address"]:
-                if any(c["address"] == active["address"] for c in read_clients()):
-                    dispatch("focus", window=selector(active))
+            try:
+                if active.get("address") and active["address"] != target["address"]:
+                    if any(c["address"] == active["address"] for c in read_clients()):
+                        dispatch("focus", window=selector(active))
+            except Exception:
+                pass
+
+    def details(self):
+        clients = read_clients()
+        state = self.load()
+        live = matching_window(state["original"], clients) if state else None
+        monitors = json.loads(hypr("-j", "monitors"))
+        try:
+            target = live or choose_window(clients)
+        except RuntimeError:
+            target = None
+        options = (state or {}).get("options", {})
+        return dict(active=live is not None, hidden=bool(live and live["workspace"]["name"] == "special:omafloat-hidden"),
+                    window=target, monitors=monitors, options=options,
+                    follow=bool(live and live.get("pinned")), above=options.get("above", True))
+
+    def configure(self, state, live, args):
+        # Original is immutable: every change remains recoverable by restore.
+        options = dict(state.get("options", {}))
+        options.setdefault("width", 600)
+        options.setdefault("corner", "bottom-right")
+        options.setdefault("follow", live.get("pinned", True))
+        options.setdefault("above", True)
+        monitors = json.loads(hypr("-j", "monitors"))
+        hidden = live["workspace"]["name"] == "special:omafloat-hidden"
+        destination = state.get("visible_destination", {})
+        selected_name = getattr(args, "monitor", None)
+        if hidden and not selected_name:
+            selected_name = destination.get("monitor_name")
+        monitor = next((m for m in monitors if m["name"] == selected_name), None)
+        if selected_name and not monitor:
+            raise RuntimeError("The selected display is no longer connected.")
+        monitor = monitor or next((m for m in monitors if m["id"] == live["monitor"]), None)
+        if monitor is None:
+            raise RuntimeError("The floating display is no longer connected. Restore the window.")
+        win = selector(live)
+        if args.action == "show" and not hidden:
+            return
+        if args.action == "maintain":
+            if options["above"] and not hidden:
+                raise_window(state["original"])
+            return
+        for key in ("width", "corner", "follow", "above"):
+            value = getattr(args, key, None)
+            if value is not None:
+                options[key] = value
+        # Journal intent before dispatch: partial failures retain a restore path.
+        state["options"] = options
+        if any(getattr(args, key, None) is not None for key in ("width", "corner", "monitor")):
+            state.pop("visible_geometry", None)
+        if hidden and getattr(args, "monitor", None):
+            state["visible_destination"] = {"monitor_name": monitor["name"],
+                                            "workspace": monitor["activeWorkspace"]}
+        self.save(state)
+        if args.action == "hide":
+            if hidden:
+                return
+            state["visible_destination"] = {"monitor_name": monitor["name"], "workspace": live["workspace"]}
+            state["visible_workspace"] = live["workspace"]  # Read older snapshots compatibly.
+            state["visible_geometry"] = {"at": live["at"], "size": live["size"]}
+            self.save(state)
+            if live["pinned"]:
+                dispatch("window.pin", window=win, action="disable")
+            dispatch("window.move", window=win, workspace="special:omafloat-hidden", follow=False)
+            return
+        pinned = live.get("pinned", False)
+        if args.action == "show" or getattr(args, "monitor", None):
+            if live["pinned"]:
+                dispatch("window.pin", window=win, action="disable")
+                pinned = False
+            dispatch("window.move", window=win, monitor=monitor["name"])
+            workspace = (state.get("visible_destination", {}).get("workspace", state.get("visible_workspace", monitor["activeWorkspace"]))
+                         if args.action == "show" and not options["follow"] else monitor["activeWorkspace"])
+            if hidden and args.action != "show":
+                dispatch("window.move", window=win, workspace="special:omafloat-hidden", follow=False)
+            else:
+                dispatch("window.move", window=win, workspace=workspace_selector(workspace), follow=False)
+                hidden = False
+        if not hidden and pinned != options["follow"]:
+            dispatch("window.pin", window=win, action="enable" if options["follow"] else "disable")
+        if args.action == "show" or any(getattr(args, key, None) is not None for key in ("width", "corner", "monitor")):
+            x, y, w, h = corner_geometry(monitor, options["width"], options["corner"])
+            if args.action == "show" and state.get("visible_geometry"):
+                x, y = state["visible_geometry"]["at"]
+                w, h = state["visible_geometry"]["size"]
+            dispatch("window.resize", window=win, x=w, y=h, relative=False)
+            dispatch("window.move", window=win, x=x, y=y, relative=False)
+        if options["above"] and not hidden:
+            raise_window(state["original"])
+
+    def is_active(self):
+        saved = self.load()
+        return saved is not None and matching_window(saved["original"], read_clients()) is not None
 
     def run(self, args):
+        if args.action == "status":
+            # State writes are atomic, so polling never blocks a toggle.
+            print(json.dumps(self.details()))
+            return 0
         with self.lock_path.open("w") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return 0
+            deadline = time.monotonic() + 3.0
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if args.action == "maintain":
+                        return 0
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("OmaFloat is busy. Try again shortly.")
+                    time.sleep(0.025)
             clients = read_clients()
             saved = self.load()
             live = matching_window(saved["original"], clients) if saved else None
-            if args.action == "status":
-                print(json.dumps({"active": live is not None}))
-                return 0
             locked = subprocess.run(["omarchy-hyprland-session-locked"], timeout=4,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if locked.returncode == 0:
+                if args.action == "maintain":
+                    return 0
                 raise RuntimeError("Unlock your Omarchy desktop before floating or returning video.")
+            if args.action in {"configure", "hide", "show", "maintain"}:
+                if not saved or not live:
+                    if args.action == "maintain":
+                        return 0
+                    raise RuntimeError("Float a video before changing its controls.")
+                self.configure(saved, live, args)
+                return 0
             if saved and live:
+                if args.action == "float":
+                    return 0
                 self.restore(saved)
                 return 0
             self.clear()
             if args.action == "restore":
                 return 0
-            self.enter(choose_window(clients, args.window), args.width)
+            self.enter(choose_window(clients, args.window), (args.width or 600))
             return 0
+
+
+def parse_bool(value):
+    if value not in {"true", "false"}:
+        raise argparse.ArgumentTypeError("Expected true or false")
+    return value == "true"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", choices=["toggle", "restore", "status"], default="toggle")
+    parser.add_argument("action", nargs="?", choices=["toggle", "float", "restore", "status", "configure", "hide", "show", "maintain"], default="toggle")
     parser.add_argument("--window", help="Explicit YouTube window address (for testing)")
-    parser.add_argument("--width", type=int, choices=range(320, 1201), metavar="320..1200", default=600)
+    parser.add_argument("--width", type=int, choices=range(320, 1201), metavar="320..1200", default=None)
+    parser.add_argument("--corner", choices=["top-left", "top-right", "bottom-left", "bottom-right"])
+    parser.add_argument("--monitor", help="Connected Hyprland monitor name")
+    parser.add_argument("--follow", type=parse_bool)
+    parser.add_argument("--above", type=parse_bool)
     args = parser.parse_args()
     try:
         return Controller().run(args)
-    except (OSError, ValueError, RuntimeError, StopIteration, subprocess.TimeoutExpired) as error:
+    except Exception as error:
         if args.action == "status":
-            print('{"active":false}')
+            print(json.dumps({"active": False, "error": str(error)}))
         else:
-            notify(str(error) or "Could not find the display for YouTube.")
+            if args.action != "maintain":
+                notify(str(error) or "OmaFloat could not complete that action.")
             print(str(error), file=sys.stderr)
         return 1
 
