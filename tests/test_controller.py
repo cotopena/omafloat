@@ -576,6 +576,59 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(live["size"], [w, h])
         self.assertEqual(state["original"], CLIENT)
 
+    def hide_then_unplug(self, follow):
+        # Hide on the external display, then undock: only the focused laptop panel remains.
+        laptop = dict(MONITOR, name="eDP-1")
+        external = dict(MONITOR, id=2, name="HDMI-A-1", x=1920, width=2560, focused=False,
+                        activeWorkspace=dict(id=9, name="9"))
+        live = dict(copy.deepcopy(FLOATED), monitor=2, workspace=dict(id=9, name="9"), at=[3800, 900], pinned=follow)
+        state = self.state()
+        state["options"] = dict(width=600, corner="bottom-right", follow=follow, above=False)
+        def effects(method, **kwargs):
+            fake_dispatch(live)(method, **kwargs)
+            if method == "window.move" and "monitor" in kwargs:
+                live["monitor"] = 1 if kwargs["monitor"] == "eDP-1" else 2
+        with patch.object(fv, "hypr", return_value=json.dumps([laptop, external])), patch.object(
+                fv, "dispatch", side_effect=effects):
+            self.controller.configure(state, live, self.configure_args("hide"))
+        self.assertEqual(state["visible_destination"]["monitor_name"], "HDMI-A-1")
+        return state, live, laptop, effects
+
+    def test_show_after_hidden_display_unplugged_uses_focused_display(self):
+        for follow in (True, False):
+            with self.subTest(follow=follow):
+                state, live, laptop, effects = self.hide_then_unplug(follow)
+                with patch.object(fv, "hypr", return_value=json.dumps([laptop])), patch.object(
+                        fv, "dispatch", side_effect=effects) as dsp:
+                    self.controller.configure(state, live, self.configure_args("show"))
+                dsp.assert_any_call("window.move", window="address:0x123", monitor="eDP-1")
+                dsp.assert_any_call("window.move", window="address:0x123", workspace=1, follow=False)
+                self.assertNotIn(9, [c.kwargs.get("workspace") for c in dsp.call_args_list])
+                x, y, w, h = fv.corner_geometry(laptop)
+                self.assertEqual((live["monitor"], live["at"], live["size"]), (1, [x, y], [w, h]))
+                self.assertEqual(live["workspace"], dict(id=1, name="1"))
+                self.assertEqual(live["pinned"], follow)
+                pins = [c.kwargs["action"] for c in dsp.call_args_list if c.args[0] == "window.pin"]
+                self.assertEqual(pins, ["enable"] if follow else [])
+                self.assertEqual(self.controller.load()["visible_destination"],
+                                 dict(monitor_name="eDP-1", workspace=dict(id=1, name="1")))
+
+    def test_hidden_configure_with_unplugged_display_retargets_destination(self):
+        state, live, laptop, effects = self.hide_then_unplug(True)
+        with patch.object(fv, "hypr", return_value=json.dumps([laptop])), patch.object(
+                fv, "dispatch", side_effect=effects) as dsp:
+            self.controller.configure(state, live, self.configure_args("maintain"))
+            dsp.assert_not_called()
+            self.controller.configure(state, live, self.configure_args(width=800))
+            self.controller.configure(state, live, self.configure_args(follow=False))
+            with self.assertRaisesRegex(RuntimeError, "no longer connected"):
+                self.controller.configure(state, live, self.configure_args(monitor="HDMI-A-1"))
+        self.assertEqual(live["workspace"]["name"], "special:omafloat-hidden")
+        saved = self.controller.load()
+        self.assertEqual(saved["visible_destination"]["monitor_name"], "eDP-1")
+        self.assertNotIn("visible_geometry", saved)
+        self.assertEqual((saved["options"]["width"], saved["options"]["follow"]), (800, False))
+
     def test_user_command_waits_for_background_lock_then_runs(self):
         self.controller.save(self.state())
         for action in ("toggle", "hide"):

@@ -360,13 +360,17 @@ class Controller:
         monitors = json.loads(hypr("-j", "monitors"))
         hidden = live["workspace"]["name"] == "special:omafloat-hidden"
         destination = state.get("visible_destination", {})
-        selected_name = getattr(args, "monitor", None)
-        if hidden and not selected_name:
-            selected_name = destination.get("monitor_name")
+        requested = getattr(args, "monitor", None)
+        selected_name = requested or (destination.get("monitor_name") if hidden else None)
         monitor = next((m for m in monitors if m["name"] == selected_name), None)
-        if selected_name and not monitor:
+        if requested and not monitor:
             raise RuntimeError("The selected display is no longer connected.")
-        monitor = monitor or next((m for m in monitors if m["id"] == live["monitor"]), None)
+        current = next((m for m in monitors if m["id"] == live["monitor"]), None)
+        # The saved display was unplugged while hidden; its geometry and workspace are stale too.
+        stale = bool(selected_name and not monitor)
+        if stale:
+            monitor = next((m for m in monitors if m.get("focused")), current or next(iter(monitors), None))
+        monitor = monitor or current
         if monitor is None:
             raise RuntimeError("The floating display is no longer connected. Restore the window.")
         win = selector(live)
@@ -382,9 +386,9 @@ class Controller:
                 options[key] = value
         # Journal intent before dispatch: partial failures retain a restore path.
         state["options"] = options
-        if any(getattr(args, key, None) is not None for key in ("width", "corner", "monitor")):
+        if stale or any(getattr(args, key, None) is not None for key in ("width", "corner", "monitor")):
             state.pop("visible_geometry", None)
-        if hidden and getattr(args, "monitor", None):
+        if hidden and (requested or stale):
             state["visible_destination"] = {"monitor_name": monitor["name"],
                                             "workspace": monitor["activeWorkspace"]}
         self.save(state)
