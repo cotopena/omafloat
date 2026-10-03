@@ -81,41 +81,70 @@ BarWidget {
     }
   }
 
+  // One bar instance exists per monitor; only the first one does background
+  // work. Elected per call because moduleWidgets() is not reactive.
+  function owner() {
+    var items = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : []
+    return items && items.length > 0 && items[0] ? items[0] : root
+  }
+  function backgroundRefresh() { if (menu.opened || root.owner() === root) root.refreshStatus() }
+
+  readonly property bool maintaining: floatingVideo && details.above !== false && !details.hidden
+  property bool maintainPending: false
+  // Floats started outside the widget arrive through the status refresh.
+  onMaintainingChanged: if (maintaining) maintainTimer.restart()
+  function maintain() {
+    if (!root.maintaining || root.busy || root.owner() !== root) return
+    if (maintainProcess.running) { root.maintainPending = true; return }
+    root.maintainPending = false
+    maintainProcess.running = true
+  }
+
   Connections {
     target: Hyprland
     function onRawEvent(event) {
       if (!event || !event.name) return
+      var name = String(event.name)
       if (["openwindow", "closewindow", "movewindowv2", "changefloatingmode", "pin", "fullscreen"]
-          .indexOf(String(event.name)) !== -1) eventTimer.restart()
+          .indexOf(name) !== -1) eventTimer.restart()
+      // Hyprland raises floating windows on focus or open, which can cover the video.
+      if (root.maintaining && ["activewindowv2", "openwindow", "changefloatingmode", "movewindowv2",
+          "workspacev2", "focusedmonv2", "fullscreen", "pin"].indexOf(name) !== -1) maintainTimer.restart()
     }
   }
 
   Timer {
     id: eventTimer
     interval: 300
-    onTriggered: root.refreshStatus()
+    onTriggered: root.backgroundRefresh()
   }
 
   // Events cover window changes; this catches anything they miss.
   Timer {
-    interval: menu.opened ? 1000 : 5000
+    interval: menu.opened ? 1000 : 30000
     running: true
     repeat: true
     triggeredOnStart: true
-    onTriggered: root.refreshStatus()
+    onTriggered: root.backgroundRefresh()
   }
 
-  Process { id: maintainProcess; command: ["python3", root.helper, "maintain"] }
-  Timer {
-    interval: 1000; repeat: true; running: root.floatingVideo && root.details.above !== false && !root.details.hidden
-    onTriggered: if (!root.busy && !maintainProcess.running) maintainProcess.running = true
+  Process {
+    id: maintainProcess
+    command: ["python3", root.helper, "maintain"]
+    onExited: if (root.maintainPending) root.maintain()
   }
+  Timer { id: maintainTimer; interval: 200; onTriggered: root.maintain() }
+  // Safety net for stacking changes no event reports.
+  Timer { interval: 12000; repeat: true; running: root.maintaining; onTriggered: root.maintain() }
 
   IpcHandler {
     target: "io.github.cotopena.omafloat"
     function toggle(): void { root.activate() }
+    // Any instance may receive this; the owner keeps the freshest state.
     function status(): string {
-      return JSON.stringify({version: "0.3.1", active: root.floatingVideo, label: root.floatingVideo ? "Return video" : "Float video", iconOnly: true, busy: toggleProcess.running})
+      var state = root.owner()
+      var active = state.floatingVideo === true
+      return JSON.stringify({version: "0.3.1", active: active, label: active ? "Return video" : "Float video", iconOnly: true, busy: state.busy === true || root.busy})
     }
   }
 
