@@ -21,7 +21,7 @@ ROOT = Path(__file__).parents[1]
 spec = importlib.util.spec_from_loader("omafloat", SourceFileLoader("omafloat", str(ROOT / "bin/omafloat")))
 fv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fv)
-CLIENT = dict(address="0x123", pid=42, stableId="42", workspace=dict(id=7, name="7"),
+CLIENT = dict(address="0x123", pid=42, stableId="1800002b", workspace=dict(id=7, name="7"),
               monitor=1, floating=False, pinned=False, fullscreen=0, fullscreenClient=0,
               at=[12, 38], size=[1800, 1000], grouped=[],
               **{"class": "chrome-youtube.com__-Profile_3", "title": "Example - YouTube"})
@@ -531,32 +531,65 @@ class ControllerTests(unittest.TestCase):
         sleep.assert_not_called()
         read.assert_not_called()
 
+    def test_raise_rejects_missing_or_malformed_identity_before_eval(self):
+        for stable in (None, "", "different", "0x42", "-42", " 42", "42 ",
+                       "4.2", 42, True, "8000000000000000"):
+            with self.subTest(stable=stable), patch.object(fv, "hypr") as hypr:
+                with self.assertRaisesRegex(RuntimeError, "Cannot safely identify"):
+                    fv.raise_window(dict(CLIENT, stableId=stable))
+                hypr.assert_not_called()
+        for key in ("stableId", "pid"):
+            client = dict(CLIENT)
+            del client[key]
+            with self.subTest(missing=key), patch.object(fv, "hypr") as hypr:
+                with self.assertRaisesRegex(RuntimeError, "Cannot safely identify"):
+                    fv.raise_window(client)
+                hypr.assert_not_called()
+        for pid in (None, "42", True):
+            with self.subTest(pid=pid), patch.object(fv, "hypr") as hypr:
+                with self.assertRaisesRegex(RuntimeError, "Cannot safely identify"):
+                    fv.raise_window(dict(CLIENT, pid=pid))
+                hypr.assert_not_called()
+
     @unittest.skipUnless(shutil.which("lua"), "Lua interpreter needed for compositor eval regression")
     def test_raise_eval_identity_races_and_failed_result(self):
         # Execute the production eval in Lua, with a compositor stub. Never hyprctl.
-        cases = {
-            "missing": "nil",
-            "reused": '{pid=42,stable_id=99,mapped=true,floating=true,workspace={name="1"}}',
-            "wrong_pid": '{pid=99,stable_id=42,mapped=true,floating=true,workspace={name="1"}}',
-            "hidden": '{pid=42,stable_id=42,mapped=true,floating=true,workspace={name="special:omafloat-hidden"}}',
-            "matching": '{pid=42,stable_id=42,mapped=true,floating=true,workspace={name="1"}}',
-            "failed": '{pid=42,stable_id=42,mapped=true,floating=true,workspace={name="1"}}',
-        }
-        # Bypass the subprocess guard only for this fixed Lua executable and stdin.
-        import subprocess
-        for name, window in cases.items():
-            script = ('local count=0; local current=' + window + '; '
-                      'hl={get_window=function(s) assert(s=="address:0x123"); return current end, '
-                      'dsp={window={alter_zorder=function(a) assert(a.window=="address:0x123" and a.mode=="top"); return a end}}, '
-                      'dispatch=function(a) count=count+1; return {ok=' + ('false' if name == "failed" else 'true') + ',error="denied"} end}; '
-                      'local ok,err=pcall(function() ' + fv.raise_script(CLIENT) + ' end); '
-                      'print(tostring(ok)..":"..count)')
-            with patch.object(fv.subprocess, "run", wraps=REAL_SUBPROCESS_RUN):
-                result = subprocess.run([shutil.which("lua"), "-"], input=script,
-                                        text=True, capture_output=True, check=True, timeout=2)
-            expected = {"missing": "false:0", "reused": "false:0", "wrong_pid": "false:0",
-                        "hidden": "true:0", "matching": "true:1", "failed": "false:1"}[name]
-            self.assertEqual(result.stdout.strip(), expected, name)
+        # Include digit-only JSON IDs: "42" is hexadecimal 66, not decimal 42.
+        for stable, integer in (("1800002b", 402653227), ("42", 66), ("1800002B", 402653227)):
+            window = ('{pid=42,stable_id=' + str(integer) +
+                      ',mapped=true,floating=true,workspace={name="1"}}')
+            cases = {
+                "missing": ("nil", "false:0"),
+                "missing_stable": (window.replace('stable_id=' + str(integer), 'stable_id=nil'), "false:0"),
+                "reused": (window.replace('stable_id=' + str(integer), 'stable_id=99'), "false:0"),
+                "wrong_pid": (window.replace('pid=42', 'pid=99'), "false:0"),
+                "hidden": (window.replace('name="1"', 'name="special:omafloat-hidden"'), "true:0"),
+                "unmapped": (window.replace('mapped=true', 'mapped=false'), "true:0"),
+                "tiled": (window.replace('floating=true', 'floating=false'), "true:0"),
+                "visible": (window, "true:1"),
+                "failed": (window, "false:1"),
+            }
+            if stable == "42":
+                cases["decimal_mismatch"] = (window.replace('stable_id=66', 'stable_id=42'), "false:0")
+            for name, (current, expected) in cases.items():
+                with self.subTest(stable=stable, case=name):
+                    script = ('local count=0; local current=' + current + '; '
+                              'hl={get_window=function(s) assert(s=="address:0x123"); return current end, '
+                              'dsp={window={alter_zorder=function(a) assert(a.window=="address:0x123" and a.mode=="top"); return a end}}, '
+                              'dispatch=function(a) count=count+1; return {ok=' + ('false' if name == "failed" else 'true') + ',error="denied"} end}; '
+                              'local ok,err=pcall(function() ' + fv.raise_script(dict(CLIENT, stableId=stable)) + ' end); '
+                              'print(tostring(ok)..":"..count); '
+                              'if not ok then print(err) end')
+                    # Bypass the subprocess guard only for this Lua executable and stdin.
+                    with patch.object(fv.subprocess, "run", wraps=REAL_SUBPROCESS_RUN):
+                        result = subprocess.run([shutil.which("lua"), "-"], input=script,
+                                                text=True, capture_output=True, check=True, timeout=2)
+                    lines = result.stdout.splitlines()
+                    self.assertEqual(lines[0], expected)
+                    if expected == "false:0":
+                        self.assertIn("closed or changed identity", lines[1])
+                    elif name == "failed":
+                        self.assertIn("window.alter_zorder: denied", lines[1])
 
     def test_invalid_state_is_ignored(self):
         for value in ("[1]", '{"version":2}', "broken"):
