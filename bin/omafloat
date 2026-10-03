@@ -55,10 +55,15 @@ def raise_script(client):
     # Never use the legacy dispatcher, which can fall back to the focused window.
     win = lua(selector(client))
     stable = client.get("stableId")
-    if stable is None or type(client.get("pid")) is not int:
+    if (not isinstance(stable, str) or not re.fullmatch(r"[0-9a-fA-F]+", stable)
+            or type(client.get("pid")) is not int):
+        raise RuntimeError("Cannot safely identify the floating window.")
+    # Hyprland JSON uses hexadecimal strings; Lua exposes integer stable IDs.
+    stable = int(stable, 16)
+    if stable > 0x7fffffffffffffff:
         raise RuntimeError("Cannot safely identify the floating window.")
     return (f"local w = hl.get_window({win}); "
-            f"if not w or w.pid ~= {lua(client['pid'])} or tostring(w.stable_id) ~= {lua(str(stable))} "
+            f"if not w or w.pid ~= {lua(client['pid'])} or w.stable_id ~= {lua(stable)} "
             'then error("The floating window closed or changed identity", 0) end; '
             'if not w.mapped or not w.floating or w.workspace.name == "special:omafloat-hidden" then return end; '
             f'local r = hl.dispatch(hl.dsp.window.alter_zorder({{window={win},mode="top"}})); '
