@@ -34,6 +34,22 @@ BarWidget {
     root.runCommand(["toggle"])
   }
 
+  // Register with the bar like WidgetButton so an open popup's dismiss layer
+  // forwards bar clicks here; only the left button toggles Quick Controls.
+  property var registeredBar: null
+  function triggerPress(button) {
+    if (root.bar) root.bar.hideTooltip(root)
+    if (button === Qt.LeftButton) menu.toggle()
+  }
+  function syncClickRegistration() {
+    if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(root)
+    registeredBar = root.bar
+    if (registeredBar && registeredBar.registerClickTarget) registeredBar.registerClickTarget(root)
+  }
+  onBarChanged: syncClickRegistration()
+  Component.onCompleted: syncClickRegistration()
+  Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(root)
+
   function refreshStatus() {
     if (toggleProcess.running) return
     // A running check may predate the change, so check again once it lands.
@@ -114,7 +130,7 @@ BarWidget {
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
-    onClicked: menu.toggle()
+    onClicked: function(mouse) { root.triggerPress(mouse.button) }
     onEntered: if (root.bar) root.bar.showTooltip(root, "OmaFloat")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
