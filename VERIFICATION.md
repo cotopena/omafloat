@@ -1,6 +1,12 @@
 # OmaFloat verification
 
-## 0.3.1 — code review fixes
+## Quick Controls — 2026-10-03
+
+The native menu, placement schematic, and controller commands pass 37 controller tests, plugin validation, QML lint with documented metadata warnings, and isolated QML rendering. Runtime checks cover accessible control roles/actions, disabled actions, dropdown state readback, and keyboard focus scrolling to Restore at a 320px height. The complete widget also loads in an isolated Wayland process with a fixture helper.
+
+See [preview and verification instructions](docs/PREVIEW.md) for commands, review regressions, and the implementation screenshot. The screenshot uses sample status data. This change has not been installed or exercised against a live browser; compositor/browser acceptance remains outstanding.
+
+## Historical verification — 0.3.1 code review fixes
 
 Changes: `status` no longer takes the toggle lock, so bar polling cannot drop a click or shortcut press. The bar refreshes on Hyprland window events, with a 30-second fallback poll, instead of every two seconds. After a toggle, all monitors refresh. Unexpected errors now show a notification. A failed refocus no longer hides the original error. The installer handles a missing `shell.json`, leaves a plugin-manager checkout untouched, and checks the IPC version through `omarchy-shell`. Its version now comes from `manifest.json`. The manifest adds bar widget aliases.
 

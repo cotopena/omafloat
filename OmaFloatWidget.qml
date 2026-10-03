@@ -10,13 +10,28 @@ BarWidget {
   moduleName: "io.github.cotopena.omafloat"
   implicitWidth: root.vertical ? root.barSize : icon.implicitWidth + Style.space(18)
   implicitHeight: root.barSize
-  property bool floatingVideo: false
+  property bool floatingVideo: details.active === true
+  property var details: ({})
+  property string error: ""
+  readonly property bool busy: toggleProcess.running
+  readonly property bool opened: menu.opened
+  readonly property bool popoutSwitchClosing: menu.popoutSwitchClosing
+  function open() { menu.open() }
+  function close() { menu.close() }
+  function closeForPopoutSwitch() { menu.closeForPopoutSwitch() }
+  function runCommand(args) {
+    if (busy) return
+    error = ""
+    toggleProcess.command = ["python3", helper].concat(args)
+    toggleProcess.running = true
+  }
+  OmaFloatPanel { id: menu; bar: root.bar; anchorItem: root; hostWidget: root }
   property bool refreshPending: false
   readonly property bool tooltipHovered: visible && opacity > 0 && mouseArea.containsMouse
-  readonly property string helper: decodeURIComponent(Qt.resolvedUrl("bin/omafloat").toString().replace(/^file:\/\//, ""))
+  property string helper: decodeURIComponent(Qt.resolvedUrl("bin/omafloat").toString().replace(/^file:\/\//, ""))
 
   function activate() {
-    if (!toggleProcess.running) toggleProcess.running = true
+    root.runCommand(["toggle"])
   }
 
   function refreshStatus() {
@@ -33,7 +48,8 @@ BarWidget {
   Process {
     id: toggleProcess
     command: ["python3", root.helper]
-    onExited: root.broadcast("refreshStatus")
+    onExited: { root.refreshStatus(); root.broadcast("refreshStatus") }
+    stderr: StdioCollector { onStreamFinished: if (this.text.trim()) root.error = this.text.trim() }
   }
 
   Process {
@@ -43,7 +59,7 @@ BarWidget {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        try { root.floatingVideo = JSON.parse(this.text).active === true }
+        try { root.details = JSON.parse(this.text) }
         catch (error) { /* Keep the last state if the helper printed nothing. */ }
       }
     }
@@ -66,11 +82,17 @@ BarWidget {
 
   // Events cover window changes; this catches anything they miss.
   Timer {
-    interval: 30000
+    interval: menu.opened ? 1000 : 5000
     running: true
     repeat: true
     triggeredOnStart: true
     onTriggered: root.refreshStatus()
+  }
+
+  Process { id: maintainProcess; command: ["python3", root.helper, "maintain"] }
+  Timer {
+    interval: 1000; repeat: true; running: root.floatingVideo && root.details.above !== false && !root.details.hidden
+    onTriggered: if (!root.busy && !maintainProcess.running) maintainProcess.running = true
   }
 
   IpcHandler {
@@ -92,7 +114,7 @@ BarWidget {
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
-    onClicked: root.activate()
+    onClicked: menu.toggle()
     onEntered: if (root.bar) root.bar.showTooltip(root, "OmaFloat")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }

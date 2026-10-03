@@ -8,9 +8,14 @@ import json
 from pathlib import Path
 import re
 import tempfile
+import threading
+import shutil
 from types import SimpleNamespace
 import unittest
 from unittest.mock import call, patch
+
+import subprocess
+REAL_SUBPROCESS_RUN = subprocess.run
 
 ROOT = Path(__file__).parents[1]
 spec = importlib.util.spec_from_loader("omafloat", SourceFileLoader("omafloat", str(ROOT / "bin/omafloat")))
@@ -47,9 +52,15 @@ def fake_dispatch(live, active=MONITOR["activeWorkspace"]):
             # Hyprland 0.56.2 pinWindow reassigns the window to the monitor's active workspace.
             live["pinned"] = kwargs["action"] == "enable"
             live["workspace"] = dict(active)
+        elif method == "window.resize":
+            live["size"] = [kwargs["x"], kwargs["y"]]
+        elif method == "window.move" and "x" in kwargs:
+            live["at"] = [kwargs["x"], kwargs["y"]]
+        elif method == "window.move" and "monitor" in kwargs:
+            live["monitor"] = 1 if kwargs["monitor"] == "DP-1" else 2
         elif method == "window.move" and "workspace" in kwargs:
             ref = str(kwargs["workspace"])
-            live["workspace"] = (dict(id=-1337, name=ref[5:]) if ref.startswith("name:")
+            live["workspace"] = (dict(id=-99, name=ref) if ref.startswith("special:") else dict(id=-1337, name=ref[5:]) if ref.startswith("name:")
                                  else dict(id=int(ref), name=ref))
     return dispatch
 
@@ -301,22 +312,24 @@ class ControllerTests(unittest.TestCase):
         self.controller.save(self.state())
         self.hold_lock()
         output = io.StringIO()
-        with patch.object(fv, "read_clients", return_value=[CLIENT]), contextlib.redirect_stdout(output):
+        with patch.object(fv, "read_clients", return_value=[CLIENT]), patch.object(fv, "hypr", side_effect=fake_hypr()), contextlib.redirect_stdout(output):
             self.assertEqual(self.controller.run(SimpleNamespace(action="status")), 0)
-        self.assertEqual(json.loads(output.getvalue()), {"active": True})
+        self.assertTrue(json.loads(output.getvalue())["active"])
 
     def test_toggle_runs_unless_a_mutator_holds_lock(self):
         self.controller.save(self.state())
         args = SimpleNamespace(action="toggle", window=None, width=600)
         with patch.object(fv, "read_clients", return_value=[CLIENT]), \
                 patch.object(fv.subprocess, "run", return_value=SimpleNamespace(returncode=1)), \
-                patch.object(fv.Controller, "restore") as restore:
+                patch.object(fv.Controller, "restore") as restore, patch.object(fv, "hypr", side_effect=fake_hypr()):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.controller.run(SimpleNamespace(action="status"))
             self.controller.run(args)
             restore.assert_called_once()
             self.hold_lock()
-            self.controller.run(args)
+            with self.assertRaisesRegex(RuntimeError, "busy"):
+                with patch.object(fv.time, "monotonic", side_effect=[0, 4]):
+                    self.controller.run(args)
             restore.assert_called_once()
 
     def test_missing_monitor_raises_clear_error(self):
@@ -358,6 +371,192 @@ class ControllerTests(unittest.TestCase):
         manifest = json.loads((ROOT / "manifest.json").read_text())
         widget = re.search(r'version: "([^"]+)"', (ROOT / "OmaFloatWidget.qml").read_text())
         self.assertEqual(widget.group(1), manifest["version"])
+
+    def configure_args(self, action="configure", **values):
+        return SimpleNamespace(action=action, width=None, corner=None, monitor=None,
+                               follow=None, above=None, **{}) if not values else SimpleNamespace(
+            **dict(dict(action=action, width=None, corner=None, monitor=None, follow=None, above=None), **values))
+
+    def test_monitor_change_repins_exactly_once(self):
+        live = copy.deepcopy(FLOATED)
+        state = self.state()
+        other = dict(MONITOR, id=2, name="HDMI-A-1")
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR, other])), patch.object(
+                fv, "dispatch", side_effect=fake_dispatch(live)) as dsp:
+            self.controller.configure(state, live, self.configure_args(monitor="HDMI-A-1"))
+        pins = [c.kwargs["action"] for c in dsp.call_args_list if c.args[0] == "window.pin"]
+        self.assertEqual(pins, ["disable", "enable"])
+        self.assertTrue(live["pinned"])
+
+    def test_hide_is_idempotent_and_show_repins_once(self):
+        live = copy.deepcopy(FLOATED)
+        state = self.state()
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
+                fv, "dispatch", side_effect=fake_dispatch(live)) as dsp:
+            self.controller.configure(state, live, self.configure_args("hide"))
+            visible = copy.deepcopy(state["visible_workspace"])
+            self.controller.configure(state, live, self.configure_args("hide"))
+            self.assertEqual(state["visible_workspace"], visible)
+            dsp.reset_mock()
+            self.controller.configure(state, live, self.configure_args("show"))
+        pins = [c.kwargs["action"] for c in dsp.call_args_list if c.args[0] == "window.pin"]
+        self.assertEqual(pins, ["enable"])
+
+    def test_behavior_changes_preserve_geometry_and_original(self):
+        live = copy.deepcopy(FLOATED)
+        state = self.state()
+        original = copy.deepcopy(state["original"])
+        state["options"] = dict(width=800, corner="top-left", follow=True, above=True)
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(fv, "dispatch") as dsp:
+            self.controller.configure(state, live, self.configure_args(follow=False, above=False))
+        self.assertEqual(state["original"], original)
+        self.assertEqual(state["options"]["width"], 800)
+        self.assertFalse(any(c.args[0] in {"window.resize", "window.move"} for c in dsp.call_args_list))
+
+    def test_disconnected_selection_does_not_mutate(self):
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(fv, "dispatch") as dsp:
+            with self.assertRaisesRegex(RuntimeError, "no longer connected"):
+                self.controller.configure(self.state(), FLOATED, self.configure_args(monitor="missing"))
+        dsp.assert_not_called()
+
+    def test_all_corners_and_tiny_display(self):
+        for corner in ("top-left", "top-right", "bottom-left", "bottom-right"):
+            x, y, w, h = fv.corner_geometry(MONITOR, 800, corner)
+            self.assertGreaterEqual(x, 20)
+            self.assertGreaterEqual(y, 50)
+            self.assertLessEqual(x + w, 1900)
+            self.assertLessEqual(y + h, 1060)
+        with self.assertRaisesRegex(RuntimeError, "too small"):
+            fv.corner_geometry(dict(MONITOR, width=70, height=70))
+
+    def test_failed_configure_retains_original_for_restore(self):
+        state = self.state()
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
+                fv, "dispatch", side_effect=RuntimeError("disconnected")):
+            with self.assertRaisesRegex(RuntimeError, "disconnected"):
+                self.controller.configure(state, FLOATED, self.configure_args(corner="top-left"))
+        self.assertEqual(self.controller.load()["original"], CLIENT)
+
+    def test_show_preserves_manually_moved_geometry(self):
+        live = copy.deepcopy(FLOATED)
+        live["at"], live["size"] = [123, 234], [700, 394]
+        state = self.state()
+        state["options"] = dict(width=600, corner="bottom-right", follow=True, above=False)
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
+                fv, "dispatch", side_effect=fake_dispatch(live)):
+            self.controller.configure(state, live, self.configure_args("hide"))
+            self.controller.configure(state, live, self.configure_args("show"))
+        self.assertEqual(live["at"], [123, 234])
+        self.assertEqual(live["size"], [700, 394])
+
+    def test_hidden_monitor_selection_stays_hidden(self):
+        live = dict(FLOATED, pinned=False, workspace=dict(id=-99, name="special:omafloat-hidden"))
+        state = self.state()
+        state["options"] = dict(width=600, corner="bottom-right", follow=True, above=False)
+        other = dict(MONITOR, id=2, name="HDMI-A-1")
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR, other])), patch.object(
+                fv, "dispatch", side_effect=fake_dispatch(live)):
+            self.controller.configure(state, live, self.configure_args(monitor="HDMI-A-1"))
+        self.assertEqual(live["workspace"]["name"], "special:omafloat-hidden")
+        self.assertFalse(live["pinned"])
+
+    def test_maintenance_only_raises_visible_enabled_float(self):
+        for hidden, above in ((False, True), (True, True), (False, False)):
+            state = self.state()
+            state["options"] = dict(above=above)
+            live = dict(FLOATED, workspace=dict(id=-99, name="special:omafloat-hidden")) if hidden else FLOATED
+            with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(fv, "raise_window") as raise_win, patch.object(fv, "dispatch") as dsp:
+                self.controller.configure(state, live, self.configure_args("maintain"))
+            self.assertEqual(raise_win.called, above and not hidden)
+            dsp.assert_not_called()
+
+    def test_state_file_private_and_malformed_nested_state_rejected(self):
+        self.controller.save(self.state())
+        self.assertEqual(self.controller.path.stat().st_mode & 0o777, 0o600)
+        for key, value in (("workspace", []), ("size", [0, 100]), ("at", [1]), ("floating", "false")):
+            state = self.state()
+            state["original"][key] = value
+            self.controller.save(state)
+            self.assertIsNone(self.controller.load())
+
+    def test_hidden_display_then_show_follow_off_keeps_destination(self):
+        live = copy.deepcopy(FLOATED)
+        live["pinned"] = False
+        state = self.state()
+        state["options"] = dict(width=600, corner="bottom-right", follow=False, above=False)
+        other = dict(MONITOR, id=2, name="HDMI-A-1", x=1920, width=2560,
+                     activeWorkspace=dict(id=9, name="9"))
+        def effects(method, **kwargs):
+            fake_dispatch(live)(method, **kwargs)
+            if method == "window.move" and "workspace" in kwargs:
+                if kwargs["workspace"] == 1:
+                    live["monitor"] = 1
+                elif kwargs["workspace"] == 9:
+                    live["monitor"] = 2
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR, other])), patch.object(
+                fv, "dispatch", side_effect=effects):
+            self.controller.configure(state, live, self.configure_args("hide"))
+            self.controller.configure(state, live, self.configure_args(monitor="HDMI-A-1"))
+            self.assertEqual(live["workspace"]["name"], "special:omafloat-hidden")
+            self.assertEqual(state["visible_destination"], dict(monitor_name="HDMI-A-1", workspace=dict(id=9, name="9")))
+            self.controller.configure(state, live, self.configure_args("show"))
+        self.assertEqual(live["monitor"], 2)
+        self.assertEqual(live["workspace"]["id"], 9)
+        self.assertFalse(live["pinned"])
+        x, y, w, h = fv.corner_geometry(other)
+        self.assertEqual(live["at"], [x, y])
+        self.assertEqual(live["size"], [w, h])
+        self.assertEqual(state["original"], CLIENT)
+
+    def test_user_command_waits_for_background_lock_then_runs(self):
+        self.controller.save(self.state())
+        for action in ("toggle", "hide"):
+            with self.subTest(action=action), self.controller.lock_path.open("w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                release = threading.Timer(0.06, lambda: fcntl.flock(lock, fcntl.LOCK_UN))
+                release.start()
+                try:
+                    with patch.object(fv, "read_clients", return_value=[FLOATED]), patch.object(
+                            fv.subprocess, "run", return_value=SimpleNamespace(returncode=1)), patch.object(
+                            fv.Controller, "restore") as restore, patch.object(fv.Controller, "configure") as configure:
+                        self.controller.run(SimpleNamespace(action=action))
+                    (restore if action == "toggle" else configure).assert_called_once()
+                finally:
+                    release.join()
+
+    def test_maintenance_skips_lock_without_waiting_or_reading(self):
+        self.hold_lock()
+        with patch.object(fv.time, "sleep") as sleep, patch.object(fv, "read_clients") as read:
+            self.assertEqual(self.controller.run(SimpleNamespace(action="maintain")), 0)
+        sleep.assert_not_called()
+        read.assert_not_called()
+
+    @unittest.skipUnless(shutil.which("lua"), "Lua interpreter needed for compositor eval regression")
+    def test_raise_eval_identity_races_and_failed_result(self):
+        # Execute the production eval in Lua, with a compositor stub. Never hyprctl.
+        cases = {
+            "missing": "nil",
+            "reused": '{pid=42,stable_id=99,mapped=true,floating=true,workspace={name="1"}}',
+            "wrong_pid": '{pid=99,stable_id=42,mapped=true,floating=true,workspace={name="1"}}',
+            "hidden": '{pid=42,stable_id=42,mapped=true,floating=true,workspace={name="special:omafloat-hidden"}}',
+            "matching": '{pid=42,stable_id=42,mapped=true,floating=true,workspace={name="1"}}',
+            "failed": '{pid=42,stable_id=42,mapped=true,floating=true,workspace={name="1"}}',
+        }
+        # Bypass the subprocess guard only for this fixed Lua executable and stdin.
+        import subprocess
+        for name, window in cases.items():
+            script = ('local count=0; local current=' + window + '; '
+                      'hl={get_window=function(s) assert(s=="address:0x123"); return current end, '
+                      'dsp={window={alter_zorder=function(a) assert(a.window=="address:0x123" and a.mode=="top"); return a end}}, '
+                      'dispatch=function(a) count=count+1; return {ok=' + ('false' if name == "failed" else 'true') + ',error="denied"} end}; '
+                      'local ok,err=pcall(function() ' + fv.raise_script(CLIENT) + ' end); '
+                      'print(tostring(ok)..":"..count)')
+            with patch.object(fv.subprocess, "run", wraps=REAL_SUBPROCESS_RUN):
+                result = subprocess.run([shutil.which("lua"), "-"], input=script,
+                                        text=True, capture_output=True, check=True, timeout=2)
+            expected = {"missing": "false:0", "reused": "false:0", "wrong_pid": "false:0",
+                        "hidden": "true:0", "matching": "true:1", "failed": "false:1"}[name]
+            self.assertEqual(result.stdout.strip(), expected, name)
 
     def test_invalid_state_is_ignored(self):
         for value in ("[1]", '{"version":2}', "broken"):

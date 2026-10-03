@@ -80,6 +80,6 @@ print(f"Installed OmaFloat {version}. Backups: {backup}")
 if managed:
     print(f"Kept the plugin-manager copy in {destination}. "
           "Update it with: omarchy plugin update io.github.cotopena.omafloat")
-print("Play a YouTube video, then click the OmaFloat icon in the bar to float it. "
-      "Hover over the icon to see OmaFloat. Click the icon again to restore it.")
+print("Play a YouTube video, open OmaFloat in the bar, and choose Float video. "
+      "Hover over the icon to see OmaFloat. Choose Restore original window to return it.")
 print("Keyboard shortcut: Super+Ctrl+Shift+P. No browser extension setup is needed.")
