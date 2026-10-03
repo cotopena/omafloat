@@ -82,7 +82,7 @@ Version 0.2 replaced the old companion-based prototype, and OmaFloat does not us
 - Keeps the same video session and playback position, using YouTube's fullscreen player inside a floating window.
 - Saves the original workspace, monitor, floating geometry, pin status, fullscreen flags, and fullscreen synchronization setting. A tiled window returns to tiling, though its exact slot may change.
 - Returns the window to its original workspace even if that workspace has since moved to another display, for example after undocking and redocking. A floating window then keeps its original size, and Hyprland chooses its position.
-- If a return does not complete, choose **Restore original window** again. A second failure releases the window as it is, so you can arrange it yourself.
+- If a return does not complete, choose **Restore original window** again. A second failure releases the window as it is, so you can arrange it yourself. A hidden float is first moved back to a visible workspace; OmaFloat keeps tracking it until that succeeds.
 - Restores existing fullscreen state if YouTube was fullscreen before activation.
 - Rejects grouped windows and special workspaces. Unlock the desktop before activating it.
 - State is local to the current Hyprland session. Closed windows are matched by address, process, and stable ID so a reused address does not affect another app.

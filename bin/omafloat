@@ -219,11 +219,36 @@ class Controller:
             reason = str(error).rstrip(".") or "YouTube could not be returned"
             # Never trap the window: a second consecutive failure releases it as it is.
             if state.get("restore_failed"):
+                # An untracked window on the hidden workspace could never be shown or floated again.
+                if not self.unhide(original):
+                    raise RuntimeError(f"{reason}. YouTube is still hidden; choose Restore original window "
+                                       "again or close that browser window.") from error
                 self.clear()
                 raise RuntimeError(f"{reason}. OmaFloat released the YouTube window; arrange it manually.") from error
             state["restore_failed"] = True
             self.save(state)
             raise RuntimeError(f"{reason}. Choose Restore original window again to release the window as it is.") from error
+
+    def unhide(self, original):
+        """Best effort: True once the window is gone or off the hidden workspace."""
+        hidden = lambda c: c is not None and c["workspace"]["name"] == "special:omafloat-hidden"
+        try:
+            current = matching_window(original, read_clients())
+            if not hidden(current):
+                return True
+            win = selector(current)
+            try:
+                dispatch("window.move", window=win, workspace=workspace_selector(original["workspace"]), follow=False)
+            except Exception:
+                monitor = next(m for m in json.loads(hypr("-j", "monitors")) if m.get("focused"))
+                dispatch("window.move", window=win, workspace=workspace_selector(monitor["activeWorkspace"]),
+                         follow=False)
+        except Exception:
+            pass
+        try:
+            return not hidden(matching_window(original, read_clients()))
+        except Exception:
+            return False
 
     def return_window(self, state, client):
         original = state["original"]

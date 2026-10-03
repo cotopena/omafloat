@@ -181,6 +181,55 @@ class ControllerTests(unittest.TestCase):
                 self.controller.restore(self.controller.load())
         self.assertFalse(self.controller.path.exists())
 
+    def hidden_dispatch(self, live, blocked):
+        # Both restore attempts fail before return_window reaches the workspace move.
+        applied = fake_dispatch(live)
+        def dispatch(method, **kwargs):
+            if method == "window.fullscreen_state" or kwargs.get("workspace") in blocked:
+                raise RuntimeError("fullscreen failed")
+            applied(method, **kwargs)
+        return dispatch
+
+    def test_repeated_failure_moves_hidden_window_before_release(self):
+        # The original workspace is tried first; the focused display's workspace is the fallback.
+        for blocked, landed in (((), 7), ((7,), 1)):
+            self.controller.save(self.state())
+            live = dict(copy.deepcopy(FLOATED), pinned=False, workspace=dict(id=-99, name="special:omafloat-hidden"))
+            with self.subTest(blocked=blocked), \
+                    patch.object(fv, "read_clients", side_effect=lambda: [copy.deepcopy(live)]), \
+                    patch.object(fv, "hypr", side_effect=fake_hypr()), patch.object(fv, "send_key"), \
+                    patch.object(fv, "dispatch", side_effect=self.hidden_dispatch(live, blocked)) as dsp:
+                with self.assertRaisesRegex(RuntimeError, "fullscreen failed. Choose Restore original window again"):
+                    self.controller.restore(self.controller.load())
+                with self.assertRaisesRegex(RuntimeError, "fullscreen failed. OmaFloat released the YouTube window"):
+                    self.controller.restore(self.controller.load())
+                dsp.assert_any_call("window.move", window="address:0x123", workspace=7, follow=False)
+                self.assertEqual(live["workspace"]["id"], landed)
+                self.assertFalse(self.controller.path.exists())
+
+    def test_hidden_window_is_never_released_while_still_hidden(self):
+        self.controller.save(self.state())
+        live = dict(copy.deepcopy(FLOATED), pinned=False, workspace=dict(id=-99, name="special:omafloat-hidden"))
+        with patch.object(fv, "read_clients", side_effect=lambda: [copy.deepcopy(live)]), \
+                patch.object(fv, "hypr", side_effect=fake_hypr()), patch.object(fv, "send_key"):
+            with patch.object(fv, "dispatch", side_effect=self.hidden_dispatch(live, (7, 1))) as dsp:
+                with self.assertRaisesRegex(RuntimeError, "again to release"):
+                    self.controller.restore(self.controller.load())
+                # Every later failure keeps tracking instead of stranding an untracked hidden window.
+                for _ in range(2):
+                    with self.assertRaisesRegex(RuntimeError, "^fullscreen failed. YouTube is still hidden; "
+                                                "choose Restore original window again or close"):
+                        self.controller.restore(self.controller.load())
+            dsp.assert_any_call("window.move", window="address:0x123", workspace=7, follow=False)
+            dsp.assert_any_call("window.move", window="address:0x123", workspace=1, follow=False)
+            self.assertEqual(live["workspace"]["name"], "special:omafloat-hidden")
+            self.assertEqual(self.controller.load(), dict(self.state(), restore_failed=True))
+            # Once the compositor cooperates again, Restore returns the window and clears tracking.
+            with patch.object(fv, "dispatch", side_effect=fake_dispatch(live)):
+                self.controller.restore(self.controller.load())
+        self.assertEqual((live["workspace"]["id"], live["floating"]), (7, False))
+        self.assertFalse(self.controller.path.exists())
+
     def migrated_dispatch(self, live):
         # Undock/redock: workspace 7 stayed on eDP-1 although DP-1 is connected again.
         applied = fake_dispatch(live)
