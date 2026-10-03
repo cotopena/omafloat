@@ -81,6 +81,8 @@ Version 0.2 replaced the old companion-based prototype, and OmaFloat does not us
 - Chooses the most recently focused supported YouTube window. A video must be the selected tab in a regular browser window.
 - Keeps the same video session and playback position, using YouTube's fullscreen player inside a floating window.
 - Saves the original workspace, monitor, floating geometry, pin status, fullscreen flags, and fullscreen synchronization setting. A tiled window returns to tiling, though its exact slot may change.
+- Returns the window to its original workspace even if that workspace has since moved to another display, for example after undocking and redocking. A floating window then keeps its original size, and Hyprland chooses its position.
+- If a return does not complete, choose **Restore original window** again. A second failure releases the window as it is, so you can arrange it yourself.
 - Restores existing fullscreen state if YouTube was fullscreen before activation.
 - Rejects grouped windows and special workspaces. Unlock the desktop before activating it.
 - State is local to the current Hyprland session. Closed windows are matched by address, process, and stable ID so a reused address does not affect another app.
@@ -106,7 +108,7 @@ python3 bin/omafloat hide
 python3 bin/omafloat show
 ```
 
-`status` returns the tracked/eligible window, monitor metadata, current visibility/pinning, and placement options without taking the mutation lock. User actions briefly wait for the controller lock (up to three seconds); background maintenance skips a busy lock. Mutations retain the original restoration snapshot; partial failures leave it available for retry. `maintain` is used by the running widget for stack-order enforcement.
+`status` returns the tracked/eligible window, monitor metadata, current visibility/pinning, and placement options without taking the mutation lock. User actions briefly wait for the controller lock (up to three seconds); background maintenance skips a busy lock. Mutations retain the original restoration snapshot; partial failures leave it available for retry, and a second consecutive failed restore releases the window. `maintain` is used by the running widget for stack-order enforcement.
 
 See [the isolated preview guide](docs/PREVIEW.md) for QML validation and fixture screenshot generation. See [VERIFICATION.md](VERIFICATION.md) for the current test record.
 

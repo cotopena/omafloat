@@ -179,6 +179,7 @@ class Controller:
                                for k in ("fullscreen", "fullscreenClient"))
                         or not isinstance(state["monitor_name"], str)
                         or type(state["entered_fullscreen"]) is not bool
+                        or type(state.get("restore_failed", False)) is not bool
                         or not isinstance(options, dict)
                         or ("width" in options and (type(options["width"]) is not int or not 320 <= options["width"] <= 1200))
                         or ("corner" in options and options["corner"] not in {"top-left", "top-right", "bottom-left", "bottom-right"})
@@ -212,6 +213,20 @@ class Controller:
         if client is None:
             self.clear()
             return
+        try:
+            self.return_window(state, client)
+        except Exception as error:
+            reason = str(error).rstrip(".") or "YouTube could not be returned"
+            # Never trap the window: a second consecutive failure releases it as it is.
+            if state.get("restore_failed"):
+                self.clear()
+                raise RuntimeError(f"{reason}. OmaFloat released the YouTube window; arrange it manually.") from error
+            state["restore_failed"] = True
+            self.save(state)
+            raise RuntimeError(f"{reason}. Choose Restore original window again to release the window as it is.") from error
+
+    def return_window(self, state, client):
+        original = state["original"]
         win = selector(client)
         if client["pinned"]:
             dispatch("window.pin", window=win, action="disable")
@@ -227,9 +242,18 @@ class Controller:
         workspace = original["workspace"]
         dispatch("window.move", window=win, workspace=workspace_selector(workspace), follow=False)
         dispatch("window.float", window=win, action="enable" if original["floating"] else "disable")
-        if original["floating"] and origin:
+        # The workspace decides placement. Saved coordinates are absolute and belong to the
+        # original display, so apply them only if the window landed there again.
+        placed = False
+        if original["floating"]:
+            current = matching_window(original, read_clients())
+            if current is None:
+                self.clear()
+                return
+            placed = bool(origin and current["monitor"] == origin["id"])
             dispatch("window.resize", window=win, x=original["size"][0], y=original["size"][1], relative=False)
-            dispatch("window.move", window=win, x=original["at"][0], y=original["at"][1], relative=False)
+            if placed:
+                dispatch("window.move", window=win, x=original["at"][0], y=original["at"][1], relative=False)
         dispatch("window.fullscreen_state", window=win, action="set",
                  internal=original["fullscreen"], client=original["fullscreenClient"])
         dispatch("window.set_prop", window=win, prop="sync_fullscreen",
@@ -242,15 +266,14 @@ class Controller:
             return
         key = "id" if workspace["id"] > 0 else "name"
         # Pinning moves a window to its monitor's active workspace; only an unpinned one has a fixed workspace.
-        geometry_failed = bool(origin and original["floating"] and (
-            any(abs(a - b) > 2 for a, b in zip(current["at"], original["at"])) or
-            any(abs(a - b) > 2 for a, b in zip(current["size"], original["size"]))))
-        if (geometry_failed or (origin and current["monitor"] != origin["id"])
-                or current["fullscreen"] != original["fullscreen"]
+        geometry_failed = original["floating"] and (
+            (placed and any(abs(a - b) > 2 for a, b in zip(current["at"], original["at"]))) or
+            any(abs(a - b) > 2 for a, b in zip(current["size"], original["size"])))
+        if (geometry_failed or current["fullscreen"] != original["fullscreen"]
                 or current["fullscreenClient"] != original["fullscreenClient"]
                 or current["floating"] != original["floating"] or current["pinned"] != original["pinned"]
                 or (not original["pinned"] and current["workspace"][key] != workspace[key])):
-            raise RuntimeError("YouTube did not return to its previous layout. Choose Restore original window to retry.")
+            raise RuntimeError("YouTube did not return to its previous layout.")
         self.clear()
 
     def enter(self, target, width):
@@ -302,9 +325,8 @@ class Controller:
             try:
                 self.restore(state)
             except Exception as restore_error:
-                raise RuntimeError(
-                    f"{error} Return failed: {restore_error}. Choose Restore original window to retry."
-                ) from error
+                # restore_error already says how to retry or that the window was released.
+                raise RuntimeError(f"{error} Return failed: {restore_error}") from error
             raise
         finally:
             try:

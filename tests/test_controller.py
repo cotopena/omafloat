@@ -167,9 +167,68 @@ class ControllerTests(unittest.TestCase):
         self.controller.save(state)
         with patch.object(fv, "read_clients", return_value=[FLOATED]), patch.object(fv, "send_key"), \
                 patch.object(fv, "dispatch", side_effect=RuntimeError("disconnected")):
-            with self.assertRaises(RuntimeError):
+            with self.assertRaisesRegex(RuntimeError, "disconnected. Choose Restore original window again to release"):
                 self.controller.restore(state)
-        self.assertEqual(self.controller.load(), state)
+        self.assertEqual(self.controller.load(), dict(self.state(), restore_failed=True))
+
+    def test_repeated_dispatch_failure_releases_window(self):
+        self.controller.save(self.state())
+        with patch.object(fv, "read_clients", return_value=[FLOATED]), patch.object(fv, "send_key"), \
+                patch.object(fv, "dispatch", side_effect=RuntimeError("disconnected")):
+            with self.assertRaisesRegex(RuntimeError, "again to release"):
+                self.controller.restore(self.controller.load())
+            with self.assertRaisesRegex(RuntimeError, "OmaFloat released the YouTube window"):
+                self.controller.restore(self.controller.load())
+        self.assertFalse(self.controller.path.exists())
+
+    def migrated_dispatch(self, live):
+        # Undock/redock: workspace 7 stayed on eDP-1 although DP-1 is connected again.
+        applied = fake_dispatch(live)
+        def dispatch(method, **kwargs):
+            applied(method, **kwargs)
+            if method == "window.move" and kwargs.get("workspace") == 7:
+                live["monitor"] = 2
+        return dispatch
+
+    def test_workspace_on_another_monitor_restores(self):
+        self.controller.save(self.state())
+        live = copy.deepcopy(FLOATED)
+        laptop = dict(MONITOR, id=2, name="eDP-1", x=1920)
+        with patch.object(fv, "read_clients", side_effect=lambda: [copy.deepcopy(live)]), \
+                patch.object(fv, "hypr", return_value=json.dumps([MONITOR, laptop])), \
+                patch.object(fv, "send_key"), patch.object(fv, "dispatch", side_effect=self.migrated_dispatch(live)) as dsp:
+            self.controller.restore(self.controller.load())
+        dsp.assert_any_call("window.move", window="address:0x123", monitor="DP-1")
+        dsp.assert_any_call("window.move", window="address:0x123", workspace=7, follow=False)
+        self.assertEqual((live["monitor"], live["workspace"]["id"], live["floating"]), (2, 7, False))
+        self.assertFalse(self.controller.path.exists())
+
+    def test_floating_original_on_moved_workspace_restores_size_only(self):
+        self.controller.save(self.state(dict(CLIENT, floating=True, at=[100, 150], size=[800, 450])))
+        live = copy.deepcopy(FLOATED)
+        laptop = dict(MONITOR, id=2, name="eDP-1", x=1920)
+        with patch.object(fv, "read_clients", side_effect=lambda: [copy.deepcopy(live)]), \
+                patch.object(fv, "hypr", return_value=json.dumps([MONITOR, laptop])), \
+                patch.object(fv, "send_key"), patch.object(fv, "dispatch", side_effect=self.migrated_dispatch(live)) as dsp:
+            self.controller.restore(self.controller.load())
+        dsp.assert_any_call("window.resize", window="address:0x123", x=800, y=450, relative=False)
+        self.assertFalse(any(c.args[0] == "window.move" and "x" in c.kwargs for c in dsp.call_args_list))
+        self.assertEqual((live["at"], live["size"]), (FLOATED["at"], [800, 450]))
+        self.assertFalse(self.controller.path.exists())
+
+    def test_failed_rollback_message_does_not_repeat_guidance(self):
+        def dispatch(method, **kwargs):
+            if method == "window.resize":
+                raise RuntimeError("resize failed")
+        with patch.object(fv, "hypr", side_effect=fake_hypr()), \
+                patch.object(fv, "read_clients", return_value=[FLOATED]), \
+                patch.object(fv, "send_key"), patch.object(fv.time, "sleep"), \
+                patch.object(fv, "dispatch", side_effect=dispatch):
+            with self.assertRaises(RuntimeError) as raised:
+                self.controller.enter(CLIENT, 600)
+        self.assertEqual(str(raised.exception), "resize failed Return failed: YouTube did not return to its "
+                         "previous layout. Choose Restore original window again to release the window as it is.")
+        self.assertTrue(self.controller.load()["restore_failed"])
 
     def test_already_fullscreen_restore_keeps_client_fullscreen(self):
         state = self.state(dict(CLIENT, fullscreen=2, fullscreenClient=2))
@@ -202,9 +261,13 @@ class ControllerTests(unittest.TestCase):
                     patch.object(fv, "read_clients", side_effect=lambda: [copy.deepcopy(live)]), \
                     patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), \
                     patch.object(fv, "send_key"), patch.object(fv, "dispatch", side_effect=dispatch):
-                with self.assertRaisesRegex(RuntimeError, "did not return"):
+                with self.assertRaisesRegex(RuntimeError, "did not return.*again to release the window"):
                     self.controller.restore(state)
-                self.assertEqual(self.controller.load(), state)
+                self.assertEqual(self.controller.load(), dict(self.state(), restore_failed=True))
+                # A second consecutive failure releases the window instead of retrying forever.
+                with self.assertRaisesRegex(RuntimeError, "did not return.*OmaFloat released"):
+                    self.controller.restore(self.controller.load())
+                self.assertFalse(self.controller.path.exists())
 
     def test_pinned_window_returns_after_workspace_switch(self):
         original = dict(CLIENT, floating=True, pinned=True, at=[100, 150], size=[800, 450])
@@ -478,6 +541,11 @@ class ControllerTests(unittest.TestCase):
             state["original"][key] = value
             self.controller.save(state)
             self.assertIsNone(self.controller.load())
+        for marker in ("true", 1, None):
+            self.controller.save(dict(self.state(), restore_failed=marker))
+            self.assertIsNone(self.controller.load())
+        self.controller.save(dict(self.state(), restore_failed=True))
+        self.assertTrue(self.controller.load()["restore_failed"])
 
     def test_hidden_display_then_show_follow_off_keeps_destination(self):
         live = copy.deepcopy(FLOATED)
