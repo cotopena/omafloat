@@ -47,8 +47,12 @@ BarWidget {
     if (registeredBar && registeredBar.registerClickTarget) registeredBar.registerClickTarget(root)
   }
   onBarChanged: syncClickRegistration()
-  Component.onCompleted: syncClickRegistration()
-  Component.onDestruction: if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(root)
+  // Instances come and go with monitors and reloads, which can move ownership.
+  Component.onCompleted: { syncClickRegistration(); root.scheduleRefresh(); root.schedulePeerRefresh() }
+  Component.onDestruction: {
+    if (registeredBar && registeredBar.unregisterClickTarget) registeredBar.unregisterClickTarget(root)
+    root.schedulePeerRefresh()
+  }
 
   function refreshStatus() {
     if (toggleProcess.running) return
@@ -76,7 +80,9 @@ BarWidget {
       waitForEnd: true
       onStreamFinished: {
         try { root.details = JSON.parse(this.text) }
-        catch (error) { /* Keep the last state if the helper printed nothing. */ }
+        catch (error) { return /* Keep the last state if the helper printed nothing. */ }
+        // Peers skip background refreshes, so hand them the owner's state.
+        if (root.owner() === root) root.peers().forEach(function(peer) { peer.details = root.details })
       }
     }
   }
@@ -87,12 +93,28 @@ BarWidget {
     var items = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : []
     return items && items.length > 0 && items[0] ? items[0] : root
   }
-  function backgroundRefresh() { if (menu.opened || root.owner() === root) root.refreshStatus() }
+  function peers() {
+    var items = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : []
+    var result = []
+    for (var i = 0; items && i < items.length; i++) {
+      if (items[i] && items[i] !== root && typeof items[i].scheduleRefresh === "function") result.push(items[i])
+    }
+    return result
+  }
+  function scheduleRefresh() { eventTimer.restart() }
+  function schedulePeerRefresh() { root.peers().forEach(function(peer) { peer.scheduleRefresh() }) }
+  // Last election result; only gates the safety timer.
+  property bool owning: false
+  function backgroundRefresh() {
+    root.owning = root.owner() === root
+    if (menu.opened || root.owning) root.refreshStatus()
+  }
 
   readonly property bool maintaining: floatingVideo && details.above !== false && !details.hidden
   property bool maintainPending: false
   // Floats started outside the widget arrive through the status refresh.
   onMaintainingChanged: if (maintaining) maintainTimer.restart()
+  onOwningChanged: if (owning && maintaining) maintainTimer.restart()
   function maintain() {
     if (!root.maintaining || root.busy || root.owner() !== root) return
     if (maintainProcess.running) { root.maintainPending = true; return }
@@ -105,8 +127,9 @@ BarWidget {
     function onRawEvent(event) {
       if (!event || !event.name) return
       var name = String(event.name)
-      if (["openwindow", "closewindow", "movewindowv2", "changefloatingmode", "pin", "fullscreen"]
-          .indexOf(name) !== -1) eventTimer.restart()
+      // Monitor hotplug adds or removes bar instances, which can move ownership.
+      if (["openwindow", "closewindow", "movewindowv2", "changefloatingmode", "pin", "fullscreen",
+          "monitoradded", "monitoraddedv2", "monitorremoved", "monitorremovedv2"].indexOf(name) !== -1) eventTimer.restart()
       // Hyprland raises floating windows on focus or open, which can cover the video.
       if (root.maintaining && ["activewindowv2", "openwindow", "changefloatingmode", "movewindowv2",
           "workspacev2", "focusedmonv2", "fullscreen", "pin"].indexOf(name) !== -1) maintainTimer.restart()
@@ -135,7 +158,7 @@ BarWidget {
   }
   Timer { id: maintainTimer; interval: 200; onTriggered: root.maintain() }
   // Safety net for stacking changes no event reports.
-  Timer { interval: 12000; repeat: true; running: root.maintaining; onTriggered: root.maintain() }
+  Timer { interval: 12000; repeat: true; running: root.maintaining && root.owning; onTriggered: root.maintain() }
 
   IpcHandler {
     target: "io.github.cotopena.omafloat"
