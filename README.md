@@ -20,7 +20,7 @@ Keep the YouTube window open. Closing it stops playback. This plugin shrinks the
 
 The popup shows the supported video window, its workspace, connected displays, and a schematic of its current geometry. Pick Small (400), Medium (600), or Large (800 pixels wide), a display, or any corner. Sizes are constrained to the display work area. The diagram is letterboxed to the display's logical aspect ratio; its quiet editor shapes are illustrative, not a live desktop capture. The video marker uses actual window position and size.
 
-**Hide float** parks the window on a dedicated special workspace without stopping playback. **Show float** returns it. **Follow workspaces** pins the float on its display. **Keep above other windows** raises it once per second while the widget runs; Hyprland has no independent always-above flag, and another floating window can briefly cover it between raises. Turning this off stops raising; floating windows still normally sit above tiled windows. Other monitors' fullscreen windows and compositor overlays are not overridden.
+**Hide float** parks the window on a dedicated special workspace without stopping playback. **Show float** returns it. If the display it was hidden from has been disconnected, Show uses the focused display and the selected corner. **Follow workspaces** pins the float on its display. **Keep above other windows** raises it whenever focus or windows change, with a check every 12 seconds as a fallback, while the widget runs. Hyprland has no independent always-above flag, so another floating window can briefly cover it until the next raise. Turning this off stops raising; floating windows still normally sit above tiled windows. Other monitors' fullscreen windows and compositor overlays are not overridden.
 
 Tab moves through controls, Enter/Space activates them, and Escape dismisses the popup. Dropdowns support arrow keys. Short popups scroll, including automatically revealing keyboard focus. Keyboard and IPC `toggle` retain the original float/restore behavior rather than toggling the menu.
 
@@ -81,6 +81,8 @@ Version 0.2 replaced the old companion-based prototype, and OmaFloat does not us
 - Chooses the most recently focused supported YouTube window. A video must be the selected tab in a regular browser window.
 - Keeps the same video session and playback position, using YouTube's fullscreen player inside a floating window.
 - Saves the original workspace, monitor, floating geometry, pin status, fullscreen flags, and fullscreen synchronization setting. A tiled window returns to tiling, though its exact slot may change.
+- Returns the window to its original workspace even if that workspace has since moved to another display, for example after undocking and redocking. A floating window then keeps its original size, and Hyprland chooses its position.
+- If a return does not complete, choose **Restore original window** again. A second failure releases the window as it is, so you can arrange it yourself. A hidden float is first moved back to a visible workspace; OmaFloat keeps tracking it until that succeeds.
 - Restores existing fullscreen state if YouTube was fullscreen before activation.
 - Rejects grouped windows and special workspaces. Unlock the desktop before activating it.
 - State is local to the current Hyprland session. Closed windows are matched by address, process, and stable ID so a reused address does not affect another app.
@@ -106,7 +108,7 @@ python3 bin/omafloat hide
 python3 bin/omafloat show
 ```
 
-`status` returns the tracked/eligible window, monitor metadata, current visibility/pinning, and placement options without taking the mutation lock. User actions briefly wait for the controller lock (up to three seconds); background maintenance skips a busy lock. Mutations retain the original restoration snapshot; partial failures leave it available for retry. `maintain` is used by the running widget for stack-order enforcement.
+`status` returns the tracked/eligible window, monitor metadata, current visibility/pinning, and placement options without taking the mutation lock. User actions briefly wait for the controller lock (up to three seconds); background maintenance skips a busy lock. Mutations retain the original restoration snapshot; partial failures leave it available for retry, and a second consecutive failed restore releases the window. `maintain` is used by the running widget for stack-order enforcement.
 
 See [the isolated preview guide](docs/PREVIEW.md) for QML validation and fixture screenshot generation. See [VERIFICATION.md](VERIFICATION.md) for the current test record.
 

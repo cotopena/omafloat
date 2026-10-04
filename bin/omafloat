@@ -179,6 +179,7 @@ class Controller:
                                for k in ("fullscreen", "fullscreenClient"))
                         or not isinstance(state["monitor_name"], str)
                         or type(state["entered_fullscreen"]) is not bool
+                        or type(state.get("restore_failed", False)) is not bool
                         or not isinstance(options, dict)
                         or ("width" in options and (type(options["width"]) is not int or not 320 <= options["width"] <= 1200))
                         or ("corner" in options and options["corner"] not in {"top-left", "top-right", "bottom-left", "bottom-right"})
@@ -212,6 +213,45 @@ class Controller:
         if client is None:
             self.clear()
             return
+        try:
+            self.return_window(state, client)
+        except Exception as error:
+            reason = str(error).rstrip(".") or "YouTube could not be returned"
+            # Never trap the window: a second consecutive failure releases it as it is.
+            if state.get("restore_failed"):
+                # An untracked window on the hidden workspace could never be shown or floated again.
+                if not self.unhide(original):
+                    raise RuntimeError(f"{reason}. YouTube is still hidden; choose Restore original window "
+                                       "again or close that browser window.") from error
+                self.clear()
+                raise RuntimeError(f"{reason}. OmaFloat released the YouTube window; arrange it manually.") from error
+            state["restore_failed"] = True
+            self.save(state)
+            raise RuntimeError(f"{reason}. Choose Restore original window again to release the window as it is.") from error
+
+    def unhide(self, original):
+        """Best effort: True once the window is gone or off the hidden workspace."""
+        hidden = lambda c: c is not None and c["workspace"]["name"] == "special:omafloat-hidden"
+        try:
+            current = matching_window(original, read_clients())
+            if not hidden(current):
+                return True
+            win = selector(current)
+            try:
+                dispatch("window.move", window=win, workspace=workspace_selector(original["workspace"]), follow=False)
+            except Exception:
+                monitor = next(m for m in json.loads(hypr("-j", "monitors")) if m.get("focused"))
+                dispatch("window.move", window=win, workspace=workspace_selector(monitor["activeWorkspace"]),
+                         follow=False)
+        except Exception:
+            pass
+        try:
+            return not hidden(matching_window(original, read_clients()))
+        except Exception:
+            return False
+
+    def return_window(self, state, client):
+        original = state["original"]
         win = selector(client)
         if client["pinned"]:
             dispatch("window.pin", window=win, action="disable")
@@ -227,9 +267,18 @@ class Controller:
         workspace = original["workspace"]
         dispatch("window.move", window=win, workspace=workspace_selector(workspace), follow=False)
         dispatch("window.float", window=win, action="enable" if original["floating"] else "disable")
-        if original["floating"] and origin:
+        # The workspace decides placement. Saved coordinates are absolute and belong to the
+        # original display, so apply them only if the window landed there again.
+        placed = False
+        if original["floating"]:
+            current = matching_window(original, read_clients())
+            if current is None:
+                self.clear()
+                return
+            placed = bool(origin and current["monitor"] == origin["id"])
             dispatch("window.resize", window=win, x=original["size"][0], y=original["size"][1], relative=False)
-            dispatch("window.move", window=win, x=original["at"][0], y=original["at"][1], relative=False)
+            if placed:
+                dispatch("window.move", window=win, x=original["at"][0], y=original["at"][1], relative=False)
         dispatch("window.fullscreen_state", window=win, action="set",
                  internal=original["fullscreen"], client=original["fullscreenClient"])
         dispatch("window.set_prop", window=win, prop="sync_fullscreen",
@@ -242,15 +291,14 @@ class Controller:
             return
         key = "id" if workspace["id"] > 0 else "name"
         # Pinning moves a window to its monitor's active workspace; only an unpinned one has a fixed workspace.
-        geometry_failed = bool(origin and original["floating"] and (
-            any(abs(a - b) > 2 for a, b in zip(current["at"], original["at"])) or
-            any(abs(a - b) > 2 for a, b in zip(current["size"], original["size"]))))
-        if (geometry_failed or (origin and current["monitor"] != origin["id"])
-                or current["fullscreen"] != original["fullscreen"]
+        geometry_failed = original["floating"] and (
+            (placed and any(abs(a - b) > 2 for a, b in zip(current["at"], original["at"]))) or
+            any(abs(a - b) > 2 for a, b in zip(current["size"], original["size"])))
+        if (geometry_failed or current["fullscreen"] != original["fullscreen"]
                 or current["fullscreenClient"] != original["fullscreenClient"]
                 or current["floating"] != original["floating"] or current["pinned"] != original["pinned"]
                 or (not original["pinned"] and current["workspace"][key] != workspace[key])):
-            raise RuntimeError("YouTube did not return to its previous layout. Choose Restore original window to retry.")
+            raise RuntimeError("YouTube did not return to its previous layout.")
         self.clear()
 
     def enter(self, target, width):
@@ -302,9 +350,8 @@ class Controller:
             try:
                 self.restore(state)
             except Exception as restore_error:
-                raise RuntimeError(
-                    f"{error} Return failed: {restore_error}. Choose Restore original window to retry."
-                ) from error
+                # restore_error already says how to retry or that the window was released.
+                raise RuntimeError(f"{error} Return failed: {restore_error}") from error
             raise
         finally:
             try:
@@ -338,13 +385,17 @@ class Controller:
         monitors = json.loads(hypr("-j", "monitors"))
         hidden = live["workspace"]["name"] == "special:omafloat-hidden"
         destination = state.get("visible_destination", {})
-        selected_name = getattr(args, "monitor", None)
-        if hidden and not selected_name:
-            selected_name = destination.get("monitor_name")
+        requested = getattr(args, "monitor", None)
+        selected_name = requested or (destination.get("monitor_name") if hidden else None)
         monitor = next((m for m in monitors if m["name"] == selected_name), None)
-        if selected_name and not monitor:
+        if requested and not monitor:
             raise RuntimeError("The selected display is no longer connected.")
-        monitor = monitor or next((m for m in monitors if m["id"] == live["monitor"]), None)
+        current = next((m for m in monitors if m["id"] == live["monitor"]), None)
+        # The saved display was unplugged while hidden; its geometry and workspace are stale too.
+        stale = bool(selected_name and not monitor)
+        if stale:
+            monitor = next((m for m in monitors if m.get("focused")), current or next(iter(monitors), None))
+        monitor = monitor or current
         if monitor is None:
             raise RuntimeError("The floating display is no longer connected. Restore the window.")
         win = selector(live)
@@ -360,9 +411,9 @@ class Controller:
                 options[key] = value
         # Journal intent before dispatch: partial failures retain a restore path.
         state["options"] = options
-        if any(getattr(args, key, None) is not None for key in ("width", "corner", "monitor")):
+        if stale or any(getattr(args, key, None) is not None for key in ("width", "corner", "monitor")):
             state.pop("visible_geometry", None)
-        if hidden and getattr(args, "monitor", None):
+        if hidden and (requested or stale):
             state["visible_destination"] = {"monitor_name": monitor["name"],
                                             "workspace": monitor["activeWorkspace"]}
         self.save(state)
