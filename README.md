@@ -1,15 +1,15 @@
-# OmaFloat
+# OmaPeek
 
 Keep your video in view.
 
-Keep a YouTube video in the corner while you work. Click the **OmaFloat icon** in the Omarchy bar to open Quick Controls, then choose **Float video** to shrink and pin your YouTube window. Choose **Restore original window** to return it. Hover over the icon to see the **OmaFloat** tooltip.
+Keep a YouTube video in the corner while you work. Click the **OmaPeek icon** in the Omarchy bar to open Quick Controls, then choose **Float video** to shrink and pin your YouTube window. Choose **Restore original window** to return it. Hover over the icon to see the **OmaPeek** tooltip.
 
 No Chrome extension installation, account, API key, or browser profile setup is needed.
 
 ## Use it
 
 1. Open a video in the YouTube app or a Chromium window and start playback.
-2. Click the **OmaFloat icon** and choose **Float video**, or press **Super + Ctrl + Shift + P** if you installed the shortcut.
+2. Click the **OmaPeek icon** and choose **Float video**, or press **Super + Ctrl + Shift + P** if you installed the shortcut.
 3. Hover over the small video for YouTube's play/pause, volume, and seek controls. Choose **Restore original window** or press the shortcut again to restore its workspace and window mode.
 
 The player starts at 600 × 338 in the bottom-right corner of your focused display. It remains visible when you switch workspaces on that display. Use your usual Omarchy window move/resize gestures to reposition it.
@@ -35,26 +35,26 @@ Requires Omarchy's Quickshell plugin system, Hyprland with the Lua dispatcher AP
 ### Option A: plugin manager (recommended)
 
 ```sh
-omarchy plugin add https://github.com/cotopena/omafloat --enable
+omarchy plugin add https://github.com/cotopena/omapeek --enable
 ```
 
 This installs and enables the bar widget. It does not add a keyboard shortcut. To add the optional shortcut, run the installer from the installed plugin:
 
 ```sh
-python3 ~/.config/omarchy/plugins/io.github.cotopena.omafloat/install.py
+python3 ~/.config/omarchy/plugins/io.github.cotopena.omapeek/install.py
 ```
 
-The installer keeps the widget where you placed it in the bar. It does not change the plugin-manager files, so `omarchy plugin update io.github.cotopena.omafloat` keeps working.
+The installer keeps the widget where you placed it in the bar. It does not change the plugin-manager files, so `omarchy plugin update io.github.cotopena.omapeek` keeps working.
 
 ### Option B: from a clone
 
 ```sh
-git clone https://github.com/cotopena/omafloat
-cd omafloat
+git clone https://github.com/cotopena/omapeek
+cd omapeek
 python3 install.py
 ```
 
-The installer validates the plugin, copies it to `~/.config/omarchy/plugins/io.github.cotopena.omafloat`, enables it (a fresh install goes in the right section of the bar; an existing widget keeps its placement), and adds the Super + Ctrl + Shift + P shortcut to `~/.config/hypr/bindings.lua` if that shortcut is free. Existing plugin files, shell settings, and bindings are backed up under `~/.local/state/omafloat/backups/` before anything is written. To update, pull the clone and run the installer again.
+The installer validates the plugin, copies it to `~/.config/omarchy/plugins/io.github.cotopena.omapeek`, enables it (a fresh install goes in the right section of the bar; an existing widget keeps its placement), and adds the Super + Ctrl + Shift + P shortcut to `~/.config/hypr/bindings.lua` if that shortcut is free. Existing plugin files, shell settings, and bindings are backed up under `~/.local/state/omapeek/backups/` before anything is written. To update, pull the clone and run the installer again.
 
 Run the installer while your desktop is unlocked. If the bar retains old code after an upgrade, run:
 
@@ -66,15 +66,21 @@ No setup is required in `chrome://extensions`.
 
 ## Marketplace package
 
-`manifest.json` and `OmaFloatWidget.qml` are at the package root; `bin/omafloat` is resolved relative to the widget. The bar works when the plugin is installed and enabled through Omarchy's plugin system. `install.py` additionally installs the optional desktop shortcut.
+`manifest.json` and `OmaPeekWidget.qml` are at the package root; `bin/omapeek` is resolved relative to the widget. The bar works when the plugin is installed and enabled through Omarchy's plugin system. `install.py` additionally installs the optional desktop shortcut.
 
-Source: [cotopena/omafloat](https://github.com/cotopena/omafloat). The marketplace listing is pending submission and review.
+Package ID: `io.github.cotopena.omapeek`. The controller is `bin/omapeek`, and optional shortcut markers are `-- BEGIN OmaPeek` / `-- END OmaPeek`.
+
+Source: [cotopena/omapeek](https://github.com/cotopena/omapeek). The marketplace listing is pending submission and review.
+
+### Upgrade from OmaFloat
+
+Return any floating or hidden video using the old plugin first. Remove `io.github.cotopena.omafloat` through the plugin manager, and remove the shortcut block between `-- BEGIN OmaFloat` and `-- END OmaFloat` from `~/.config/hypr/bindings.lua`. Run `hyprctl reload` and `hyprctl configerrors`, then install OmaPeek with the commands above. The new package uses its own runtime directory, `omapeek`, and hidden workspace, `special:omapeek-hidden`. The installer refuses to overwrite the old shortcut automatically. Existing backups remain available in `~/.local/state/omafloat/backups/`.
 
 ### Upgrade from Float Video
 
-Return any floating video first. Remove the old `gus.float-video` plugin through the plugin manager. If you installed its keyboard shortcut, remove the block between `-- BEGIN Omarchy Float Video` and `-- END Omarchy Float Video` from `~/.config/hypr/bindings.lua`, then run `hyprctl reload` and `hyprctl configerrors`. Install OmaFloat using either method above. The installer refuses to replace an existing legacy shortcut automatically. Existing backups remain under `~/.local/state/omarchy-float-video/backups/`.
+Return any floating video first. Remove the old `gus.float-video` plugin through the plugin manager. If you installed its keyboard shortcut, remove the block between `-- BEGIN Omarchy Float Video` and `-- END Omarchy Float Video` from `~/.config/hypr/bindings.lua`, then run `hyprctl reload` and `hyprctl configerrors`. Install OmaPeek using either method above. The installer refuses to replace an existing legacy shortcut automatically. Existing backups remain under `~/.local/state/omarchy-float-video/backups/`.
 
-Version 0.2 replaced the old companion-based prototype, and OmaFloat does not use a browser extension. Any extension previously loaded manually for Float Video can be removed separately in Chromium.
+Version 0.2 replaced the old companion-based prototype, and OmaPeek does not use a browser extension. Any extension previously loaded manually for Float Video can be removed separately in Chromium.
 
 ## Behavior and limits
 
@@ -82,7 +88,7 @@ Version 0.2 replaced the old companion-based prototype, and OmaFloat does not us
 - Keeps the same video session and playback position, using YouTube's fullscreen player inside a floating window.
 - Saves the original workspace, monitor, floating geometry, pin status, fullscreen flags, and fullscreen synchronization setting. A tiled window returns to tiling, though its exact slot may change.
 - Returns the window to its original workspace even if that workspace has since moved to another display, for example after undocking and redocking. A floating window then keeps its original size, and Hyprland chooses its position.
-- If a return does not complete, choose **Restore original window** again. A second failure releases the window as it is, so you can arrange it yourself. A hidden float is first moved back to a visible workspace; OmaFloat keeps tracking it until that succeeds.
+- If a return does not complete, choose **Restore original window** again. A second failure releases the window as it is, so you can arrange it yourself. A hidden float is first moved back to a visible workspace; OmaPeek keeps tracking it until that succeeds.
 - Restores existing fullscreen state if YouTube was fullscreen before activation.
 - Rejects grouped windows and special workspaces. Unlock the desktop before activating it.
 - State is local to the current Hyprland session. Closed windows are matched by address, process, and stable ID so a reused address does not affect another app.
@@ -94,18 +100,18 @@ Version 0.2 replaced the old companion-based prototype, and OmaFloat does not us
 ```sh
 omarchy plugin validate .
 python3 -m unittest discover -s tests -v
-python3 bin/omafloat status
-python3 bin/omafloat restore
+python3 bin/omapeek status
+python3 bin/omapeek restore
 ```
 
 The helper accepts `--width 320..1200` and an explicit `--window 0x...` for testing. Controls use serialized commands:
 
 ```sh
-python3 bin/omafloat float
-python3 bin/omafloat configure --width 800 --corner top-left --monitor DP-1
-python3 bin/omafloat configure --follow false --above false
-python3 bin/omafloat hide
-python3 bin/omafloat show
+python3 bin/omapeek float
+python3 bin/omapeek configure --width 800 --corner top-left --monitor DP-1
+python3 bin/omapeek configure --follow false --above false
+python3 bin/omapeek hide
+python3 bin/omapeek show
 ```
 
 `status` returns the tracked/eligible window, monitor metadata, current visibility/pinning, and placement options without taking the mutation lock. User actions briefly wait for the controller lock (up to three seconds); background maintenance skips a busy lock. Mutations retain the original restoration snapshot; partial failures leave it available for retry, and a second consecutive failed restore releases the window. `maintain` is used by the running widget for stack-order enforcement.
@@ -114,8 +120,12 @@ See [the isolated preview guide](docs/PREVIEW.md) for QML validation and fixture
 
 ## Remove
 
-Return the video first. Disable/remove `io.github.cotopena.omafloat` through Omarchy's plugin manager. Remove the block between `-- BEGIN OmaFloat` and `-- END OmaFloat` in `~/.config/hypr/bindings.lua`, then run `hyprctl reload` and `hyprctl configerrors`.
+Return the video first. Disable/remove `io.github.cotopena.omapeek` through Omarchy's plugin manager. Remove the block between `-- BEGIN OmaPeek` and `-- END OmaPeek` in `~/.config/hypr/bindings.lua`, then run `hyprctl reload` and `hyprctl configerrors`.
 
 ## License
 
-MIT.
+OmaPeek's own contributions are [MIT licensed](LICENSE), Copyright (c) 2026 Gus.
+The dropdown is adapted from [Omarchy](https://github.com/omacom/omarchy),
+Copyright (c) David Heinemeier Hansson, also under MIT. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for source provenance and the
+complete upstream notice. Keep both license files with redistributed copies.

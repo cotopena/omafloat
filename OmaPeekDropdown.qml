@@ -1,5 +1,9 @@
 pragma ComponentBehavior: Bound
-// Adapted from Omarchy Ui/Dropdown.qml; native theme/keyboard behavior, accessible trigger and options.
+// Adapted from Omarchy shell/Ui/Dropdown.qml (MIT).
+// Copyright (c) David Heinemeier Hansson
+// Upstream: https://github.com/omacom/omarchy/blob/b9e0ac4f1d8b33ab01af0cbb3a95c8667ee69eb3/shell/Ui/Dropdown.qml
+// Full upstream permission and warranty notice: THIRD_PARTY_NOTICES.md.
+// OmaPeek adaptations: accessibility, disabled guards, and selection readback.
 import QtQuick
 import QtQuick.Controls
 import qs.Commons

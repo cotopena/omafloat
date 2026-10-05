@@ -9,7 +9,7 @@ import json
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--output', type=Path, default=root / 'docs/screenshots/omafloat-quick-controls.png')
+parser.add_argument('--output', type=Path, default=root / 'docs/screenshots/omapeek-quick-controls.png')
 parser.add_argument('--width', type=int, default=360)
 parser.add_argument('--height', type=int, default=760)
 parser.add_argument('--monitor-width', type=int, default=1920)
@@ -20,19 +20,19 @@ parser.add_argument('--accessibility-check', action='store_true', help='Assert a
 parser.add_argument('--lint', action='store_true')
 args = parser.parse_args()
 args.output.parent.mkdir(parents=True, exist_ok=True)
-with tempfile.TemporaryDirectory(prefix='omafloat-preview-') as temp:
+with tempfile.TemporaryDirectory(prefix='omapeek-preview-') as temp:
     base = Path(temp)
     # qs imports use the config root at runtime; qmllint uses an explicit qs folder.
     (base / 'qs').mkdir()
     for module in ('Ui', 'Commons'):
         (base / module).symlink_to(Path('/usr/share/omarchy/shell') / module)
         (base / 'qs' / module).symlink_to(Path('/usr/share/omarchy/shell') / module)
-    for name in ('QuickControls.qml', 'OFloatIcon.qml', 'OmaFloatWidget.qml', 'OmaFloatPanel.qml', 'ControlsViewport.qml', 'OmaFloatButton.qml', 'OmaFloatToggle.qml', 'OmaFloatDropdown.qml'):
+    for name in ('QuickControls.qml', 'OPeekIcon.qml', 'OmaPeekWidget.qml', 'OmaPeekPanel.qml', 'ControlsViewport.qml', 'OmaPeekButton.qml', 'OmaPeekToggle.qml', 'OmaPeekDropdown.qml'):
         (base / name).symlink_to(root / name)
     (base / 'AccessibilityChecks.js').symlink_to(root / 'tests/AccessibilityChecks.js')
     if args.lint:
         raise SystemExit(subprocess.run(['/usr/lib/qt6/bin/qmllint', '-I', str(base),
-            *[str(base / n) for n in ('QuickControls.qml', 'ControlsViewport.qml', 'OmaFloatPanel.qml', 'OmaFloatWidget.qml', 'OmaFloatButton.qml', 'OmaFloatToggle.qml', 'OmaFloatDropdown.qml')]]).returncode)
+            *[str(base / n) for n in ('QuickControls.qml', 'ControlsViewport.qml', 'OmaPeekPanel.qml', 'OmaPeekWidget.qml', 'OmaPeekButton.qml', 'OmaPeekToggle.qml', 'OmaPeekDropdown.qml')]]).returncode)
     fixture = dict(active=True, hidden=False, follow=True, above=True,
         options=dict(width=600, corner='bottom-right', follow=True, above=True),
         window={'class': 'Chromium', 'title': 'Designing a calmer desktop - YouTube',
@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='omafloat-preview-') as temp:
         (base / 'shell.qml').write_text("""import QtQuick
 import Quickshell
 ShellRoot {
-  OmaFloatWidget { visible: false; helper: HELPER }
+  OmaPeekWidget { visible: false; helper: HELPER }
   Timer { interval: 1800; running: true; onTriggered: Qt.quit() }
 }
 """.replace("HELPER", json.dumps(str(helper))))

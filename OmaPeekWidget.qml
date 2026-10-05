@@ -7,7 +7,7 @@ import qs.Commons
 
 BarWidget {
   id: root
-  moduleName: "io.github.cotopena.omafloat"
+  moduleName: "io.github.cotopena.omapeek"
   implicitWidth: root.vertical ? root.barSize : icon.implicitWidth + Style.space(18)
   implicitHeight: root.barSize
   property bool floatingVideo: details.active === true
@@ -25,10 +25,10 @@ BarWidget {
     toggleProcess.command = ["python3", helper].concat(args)
     toggleProcess.running = true
   }
-  OmaFloatPanel { id: menu; bar: root.bar; anchorItem: root; hostWidget: root }
+  OmaPeekPanel { id: menu; bar: root.bar; anchorItem: root; hostWidget: root }
   property bool refreshPending: false
   readonly property bool tooltipHovered: visible && opacity > 0 && mouseArea.containsMouse
-  property string helper: decodeURIComponent(Qt.resolvedUrl("bin/omafloat").toString().replace(/^file:\/\//, ""))
+  property string helper: decodeURIComponent(Qt.resolvedUrl("bin/omapeek").toString().replace(/^file:\/\//, ""))
 
   function activate() {
     root.runCommand(["toggle"])
@@ -161,17 +161,17 @@ BarWidget {
   Timer { interval: 12000; repeat: true; running: root.maintaining && root.owning; onTriggered: root.maintain() }
 
   IpcHandler {
-    target: "io.github.cotopena.omafloat"
+    target: "io.github.cotopena.omapeek"
     function toggle(): void { root.activate() }
     // Any instance may receive this; the owner keeps the freshest state.
     function status(): string {
       var state = root.owner()
       var active = state.floatingVideo === true
-      return JSON.stringify({version: "0.3.1", active: active, label: active ? "Return video" : "Float video", iconOnly: true, busy: state.busy === true || root.busy})
+      return JSON.stringify({version: "0.4.0", active: active, label: active ? "Return video" : "Float video", iconOnly: true, busy: state.busy === true || root.busy})
     }
   }
 
-  OFloatIcon {
+  OPeekIcon {
     id: icon
     anchors.centerIn: parent
     color: root.bar ? root.bar.barForeground : Color.foreground
@@ -183,7 +183,7 @@ BarWidget {
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
     onClicked: function(mouse) { root.triggerPress(mouse.button) }
-    onEntered: if (root.bar) root.bar.showTooltip(root, "OmaFloat")
+    onEntered: if (root.bar) root.bar.showTooltip(root, "OmaPeek")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 }

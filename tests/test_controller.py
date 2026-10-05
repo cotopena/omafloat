@@ -18,7 +18,7 @@ import subprocess
 REAL_SUBPROCESS_RUN = subprocess.run
 
 ROOT = Path(__file__).parents[1]
-spec = importlib.util.spec_from_loader("omafloat", SourceFileLoader("omafloat", str(ROOT / "bin/omafloat")))
+spec = importlib.util.spec_from_loader("omapeek", SourceFileLoader("omapeek", str(ROOT / "bin/omapeek")))
 fv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fv)
 CLIENT = dict(address="0x123", pid=42, stableId="1800002b", workspace=dict(id=7, name="7"),
@@ -177,7 +177,7 @@ class ControllerTests(unittest.TestCase):
                 patch.object(fv, "dispatch", side_effect=RuntimeError("disconnected")):
             with self.assertRaisesRegex(RuntimeError, "again to release"):
                 self.controller.restore(self.controller.load())
-            with self.assertRaisesRegex(RuntimeError, "OmaFloat released the YouTube window"):
+            with self.assertRaisesRegex(RuntimeError, "OmaPeek released the YouTube window"):
                 self.controller.restore(self.controller.load())
         self.assertFalse(self.controller.path.exists())
 
@@ -194,14 +194,14 @@ class ControllerTests(unittest.TestCase):
         # The original workspace is tried first; the focused display's workspace is the fallback.
         for blocked, landed in (((), 7), ((7,), 1)):
             self.controller.save(self.state())
-            live = dict(copy.deepcopy(FLOATED), pinned=False, workspace=dict(id=-99, name="special:omafloat-hidden"))
+            live = dict(copy.deepcopy(FLOATED), pinned=False, workspace=dict(id=-99, name="special:omapeek-hidden"))
             with self.subTest(blocked=blocked), \
                     patch.object(fv, "read_clients", side_effect=lambda: [copy.deepcopy(live)]), \
                     patch.object(fv, "hypr", side_effect=fake_hypr()), patch.object(fv, "send_key"), \
                     patch.object(fv, "dispatch", side_effect=self.hidden_dispatch(live, blocked)) as dsp:
                 with self.assertRaisesRegex(RuntimeError, "fullscreen failed. Choose Restore original window again"):
                     self.controller.restore(self.controller.load())
-                with self.assertRaisesRegex(RuntimeError, "fullscreen failed. OmaFloat released the YouTube window"):
+                with self.assertRaisesRegex(RuntimeError, "fullscreen failed. OmaPeek released the YouTube window"):
                     self.controller.restore(self.controller.load())
                 dsp.assert_any_call("window.move", window="address:0x123", workspace=7, follow=False)
                 self.assertEqual(live["workspace"]["id"], landed)
@@ -209,7 +209,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_hidden_window_is_never_released_while_still_hidden(self):
         self.controller.save(self.state())
-        live = dict(copy.deepcopy(FLOATED), pinned=False, workspace=dict(id=-99, name="special:omafloat-hidden"))
+        live = dict(copy.deepcopy(FLOATED), pinned=False, workspace=dict(id=-99, name="special:omapeek-hidden"))
         with patch.object(fv, "read_clients", side_effect=lambda: [copy.deepcopy(live)]), \
                 patch.object(fv, "hypr", side_effect=fake_hypr()), patch.object(fv, "send_key"):
             with patch.object(fv, "dispatch", side_effect=self.hidden_dispatch(live, (7, 1))) as dsp:
@@ -222,7 +222,7 @@ class ControllerTests(unittest.TestCase):
                         self.controller.restore(self.controller.load())
             dsp.assert_any_call("window.move", window="address:0x123", workspace=7, follow=False)
             dsp.assert_any_call("window.move", window="address:0x123", workspace=1, follow=False)
-            self.assertEqual(live["workspace"]["name"], "special:omafloat-hidden")
+            self.assertEqual(live["workspace"]["name"], "special:omapeek-hidden")
             self.assertEqual(self.controller.load(), dict(self.state(), restore_failed=True))
             # Once the compositor cooperates again, Restore returns the window and clears tracking.
             with patch.object(fv, "dispatch", side_effect=fake_dispatch(live)):
@@ -314,7 +314,7 @@ class ControllerTests(unittest.TestCase):
                     self.controller.restore(state)
                 self.assertEqual(self.controller.load(), dict(self.state(), restore_failed=True))
                 # A second consecutive failure releases the window instead of retrying forever.
-                with self.assertRaisesRegex(RuntimeError, "did not return.*OmaFloat released"):
+                with self.assertRaisesRegex(RuntimeError, "did not return.*OmaPeek released"):
                     self.controller.restore(self.controller.load())
                 self.assertFalse(self.controller.path.exists())
 
@@ -454,7 +454,7 @@ class ControllerTests(unittest.TestCase):
         dsp.assert_not_called()
 
     def test_unexpected_error_notifies(self):
-        with patch.object(fv.sys, "argv", ["omafloat"]), patch.object(fv, "notify") as notify, \
+        with patch.object(fv.sys, "argv", ["omapeek"]), patch.object(fv, "notify") as notify, \
                 patch.object(fv.Controller, "run", side_effect=KeyError("monitor")), \
                 contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(fv.main(), 1)
@@ -481,7 +481,7 @@ class ControllerTests(unittest.TestCase):
 
     def test_widget_version_matches_manifest(self):
         manifest = json.loads((ROOT / "manifest.json").read_text())
-        widget = re.search(r'version: "([^"]+)"', (ROOT / "OmaFloatWidget.qml").read_text())
+        widget = re.search(r'version: "([^"]+)"', (ROOT / "OmaPeekWidget.qml").read_text())
         self.assertEqual(widget.group(1), manifest["version"])
 
     def configure_args(self, action="configure", **values):
@@ -562,21 +562,21 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(live["size"], [700, 394])
 
     def test_hidden_monitor_selection_stays_hidden(self):
-        live = dict(FLOATED, pinned=False, workspace=dict(id=-99, name="special:omafloat-hidden"))
+        live = dict(FLOATED, pinned=False, workspace=dict(id=-99, name="special:omapeek-hidden"))
         state = self.state()
         state["options"] = dict(width=600, corner="bottom-right", follow=True, above=False)
         other = dict(MONITOR, id=2, name="HDMI-A-1")
         with patch.object(fv, "hypr", return_value=json.dumps([MONITOR, other])), patch.object(
                 fv, "dispatch", side_effect=fake_dispatch(live)):
             self.controller.configure(state, live, self.configure_args(monitor="HDMI-A-1"))
-        self.assertEqual(live["workspace"]["name"], "special:omafloat-hidden")
+        self.assertEqual(live["workspace"]["name"], "special:omapeek-hidden")
         self.assertFalse(live["pinned"])
 
     def test_maintenance_only_raises_visible_enabled_float(self):
         for hidden, above in ((False, True), (True, True), (False, False)):
             state = self.state()
             state["options"] = dict(above=above)
-            live = dict(FLOATED, workspace=dict(id=-99, name="special:omafloat-hidden")) if hidden else FLOATED
+            live = dict(FLOATED, workspace=dict(id=-99, name="special:omapeek-hidden")) if hidden else FLOATED
             with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(fv, "raise_window") as raise_win, patch.object(fv, "dispatch") as dsp:
                 self.controller.configure(state, live, self.configure_args("maintain"))
             self.assertEqual(raise_win.called, above and not hidden)
@@ -614,7 +614,7 @@ class ControllerTests(unittest.TestCase):
                 fv, "dispatch", side_effect=effects):
             self.controller.configure(state, live, self.configure_args("hide"))
             self.controller.configure(state, live, self.configure_args(monitor="HDMI-A-1"))
-            self.assertEqual(live["workspace"]["name"], "special:omafloat-hidden")
+            self.assertEqual(live["workspace"]["name"], "special:omapeek-hidden")
             self.assertEqual(state["visible_destination"], dict(monitor_name="HDMI-A-1", workspace=dict(id=9, name="9")))
             self.controller.configure(state, live, self.configure_args("show"))
         self.assertEqual(live["monitor"], 2)
@@ -672,7 +672,7 @@ class ControllerTests(unittest.TestCase):
             self.controller.configure(state, live, self.configure_args(follow=False))
             with self.assertRaisesRegex(RuntimeError, "no longer connected"):
                 self.controller.configure(state, live, self.configure_args(monitor="HDMI-A-1"))
-        self.assertEqual(live["workspace"]["name"], "special:omafloat-hidden")
+        self.assertEqual(live["workspace"]["name"], "special:omapeek-hidden")
         saved = self.controller.load()
         self.assertEqual(saved["visible_destination"]["monitor_name"], "eDP-1")
         self.assertNotIn("visible_geometry", saved)
@@ -733,7 +733,7 @@ class ControllerTests(unittest.TestCase):
                 "missing_stable": (window.replace('stable_id=' + str(integer), 'stable_id=nil'), "false:0"),
                 "reused": (window.replace('stable_id=' + str(integer), 'stable_id=99'), "false:0"),
                 "wrong_pid": (window.replace('pid=42', 'pid=99'), "false:0"),
-                "hidden": (window.replace('name="1"', 'name="special:omafloat-hidden"'), "true:0"),
+                "hidden": (window.replace('name="1"', 'name="special:omapeek-hidden"'), "true:0"),
                 "unmapped": (window.replace('mapped=true', 'mapped=false'), "true:0"),
                 "tiled": (window.replace('floating=true', 'floating=false'), "true:0"),
                 "visible": (window, "true:1"),

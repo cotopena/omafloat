@@ -26,7 +26,7 @@ Column {
     font.pixelSize: Style.font.body
     elide: Text.ElideRight
   }
-  component Action: OmaFloatButton {
+  component Action: OmaPeekButton {
     width: root.width
     focusable: true
     bordered: true
@@ -36,10 +36,10 @@ Column {
   Row {
     width: parent.width
     spacing: Style.space(10)
-    OFloatIcon { color: Color.accent; anchors.verticalCenter: parent.verticalCenter }
+    OPeekIcon { color: Color.accent; anchors.verticalCenter: parent.verticalCenter }
     Column {
       width: parent.width - 42
-      Label { text: "OmaFloat"; font.bold: true; font.pixelSize: Style.font.title }
+      Label { text: "OmaPeek"; font.bold: true; font.pixelSize: Style.font.title }
       Label { text: "QUICK CONTROLS · " + (root.busy ? "Working…" : root.status.active ? (root.status.hidden ? "Hidden" : "Floating") : "Ready"); font.pixelSize: Style.font.caption }
     }
   }
@@ -59,7 +59,7 @@ Column {
     spacing: Style.space(4)
     Repeater {
       model: ["Small", "Medium", "Large"]
-      OmaFloatButton {
+      OmaPeekButton {
         required property string modelData
         required property int index
         width: (root.width - Style.space(4) * 2) / 3
@@ -73,7 +73,7 @@ Column {
       }
     }
   }
-  OmaFloatDropdown {
+  OmaPeekDropdown {
     width: parent.width
     objectName: "displayPicker"
     label: "Display"
@@ -126,7 +126,7 @@ Column {
     }
     Repeater {
       model: root.corners
-      OmaFloatButton {
+      OmaPeekButton {
         required property string modelData
         width: 32; height: 28
         x: modelData.endsWith("left") ? 0 : desktop.width - width
@@ -143,7 +143,7 @@ Column {
     }
   }
   Label { text: "Desktop schematic · select a corner"; font.pixelSize: Style.font.caption; opacity: 0.65 }
-  OmaFloatDropdown {
+  OmaPeekDropdown {
     width: parent.width
     objectName: "placementPicker"
     label: "Placement"; showLabel: false
@@ -154,7 +154,7 @@ Column {
       root.configure(["--corner", value])
     }
   }
-  OmaFloatToggle {
+  OmaPeekToggle {
     width: parent.width; implicitHeight: 42
     objectName: "followToggle"
     label: "Follow workspaces"; titleSize: Style.font.body
@@ -162,7 +162,7 @@ Column {
     enabled: root.status.active === true && !root.busy
     onClicked: if (enabled) root.configure(["--follow", checked ? "false" : "true"])
   }
-  OmaFloatToggle {
+  OmaPeekToggle {
     width: parent.width; implicitHeight: 42
     objectName: "aboveToggle"
     label: "Keep above other windows"; titleSize: Style.font.body

@@ -1,6 +1,42 @@
-# OmaFloat verification
+# OmaPeek verification
 
-## Quick Controls — 2026-10-03
+## OmaPeek package identity — 2026-10-05, 0.4.0
+
+Renamed the product, repository references, plugin ID, IPC target, QML components, icon, controller, shortcut markers, preview asset, and runtime/hidden-workspace names to OmaPeek. Current package ID is `io.github.cotopena.omapeek`; source is `https://github.com/cotopena/omapeek`. Historical records below retain the names and paths actually tested at their recorded commits. The earlier live acceptance remains evidence for the pre-rename implementation, not a new browser acceptance run.
+
+Rename checks: all 46 controller tests, plugin validation, whitespace checks, and isolated full-widget loading pass. QML lint completes with the previously documented dynamic-type metadata warnings.
+
+## Live acceptance — 2026-10-05, df353ad
+
+Tested the installed plugin against Hyprland 0.56.2 and the existing Chromium YouTube app on two 1920 × 1080 displays (HDMI-A-1 and DP-1). Controller dispatches here were real, not mocks. Local evidence is retained in `/tmp/omafloat-live-20261005/`; captures include unrelated desktop content and are intentionally not published in the repository.
+
+Passed:
+
+- Native bar click opens Quick Controls; repeated same-icon click closes it through the popup dismissal layer. Outside click closes it, and clicking the other display's bar opens a peer popup with matching float size, corner, display, Follow and Above readback.
+- Native Hide/Show buttons change actual visibility; display dropdown selects DP-1 and updates actual placement/readback. Escape dismissed the layer, confirmed by layer inventory. Initial apparent Tab focus is superseded by the additional keyboard observations below; full Tab traversal was not established.
+- Real controller placement covers widths 400, 600, 800 (heights 225, 338, 450) at all four corners. Moving between both displays passes. Hide, change display while hidden with Follow off, then Show returns to the selected display/workspace.
+- Follow off unpins; Follow on pins and tracks an actual workspace change. Above off/on and maintenance return successfully with correct option readback. A competing-window stacking check was attempted but remained inconclusive because input/focus and browser navigation interfered.
+- Three consecutive normal float/restore cycles return to tiled, unpinned workspace 10 with fullscreen 0/0; floating establishes client fullscreen 2 each time. A separate cycle begun in actual YouTube player fullscreen returns to fullscreen 2/2, with a capture showing the fullscreen player.
+- The session began with an active tracked float. Its original runtime snapshot/restore target was preserved byte-for-byte. Final window position/size, floating/pinned/fullscreen states, Follow/Above options, both monitor workspaces, focus and cursor match the initial state. The final state remains an active 400 × 225 top-right float, not a tiled restored window.
+
+Input tooling and limits:
+
+- `send_key_state` mouse down/up calls returned success but did not exercise the layer-shell bar. Native clicks were completed using a short-lived unprivileged `zwlr_virtual_pointer_v1` client compiled from the official Hyprland v0.56.2 protocol XML. Cursor readback confirmed requested global coordinates; each invocation released the button and disconnected. No daemon, installation, root/input permission change, remote-debugging port, or process restart was used. Existing browser-extension automation was used only during final browser recovery.
+- An early IPC-open plus immediate synthetic Tab/Return reached an unrelated terminal pane and submitted an existing unfinished draft. The other agent responded with clarification only. After confirming that the pane was idle, its input was empty, and no newer input followed, the original draft was restored without Enter and verified unsent. No unrelated project files were touched. This input incident does not establish a plugin keyboard defect. Full keyboard traversal and screen-reader behavior remain unverified. The configured shortcut was attempted with synthetic input, but no toggle was verified; it is inconclusive. Widget IPC toggle activation was not exercised; normal cycles used the controller CLI.
+- Physical monitor disconnection/reconnection, bar-owner replacement on hotplug, and missing-monitor restoration remain hardware-only unverified checks. No monitor was disabled to simulate unplugging. Peer readback does not prove hotplug ownership handoff.
+- This is one installed desktop/browser combination, not fresh-machine installation coverage. No marketplace submission, commit or push was performed.
+
+### Additional runtime checks and incident — 2026-10-05
+
+Same-display corner dropdown Down/Enter selected bottom-left with real controller readback. Display dropdown Down/Enter selected DP-1. Subsequent Tab focus did not provide reliable per-control evidence; full traversal and keyboard size activation remain inconclusive. Bulk keyboard input reached Chromium UI, and the original tab navigated to Google's “Signed out – syncing is paused” landing page. No sign-in or account repair was attempted. The recorded exact original video URL was reopened in the same original tab to restore the video view; the browser sign-out/sync side effect is not reversed by compositor restoration. The unrelated unfinished draft was separately restored unsent as described above.
+
+The live Super+Ctrl+Shift+P binding matches the installed helper, but synthetic chord attempts did not produce a verified toggle; physical shortcut activation remains unverified. A temporary Foot window was created and removed for overlap checks. Above off/on readback passed, but browser focus/navigation interference prevented a clean stacking verdict; keep-above competing-window behavior remains inconclusive. No further keyboard/control experiments were continued after the stop instruction.
+
+Final browser recovery: the observed landing page title was `Signed out – syncing is paused`, at `https://accounts.google.com/signout/chrome/landing` (query omitted). After reopening the recorded video in the same original tab, YouTube displayed a Sign in link. This confirms the current signed-out state; initial authentication state was not captured, so its exact change and cause are not proven. Authentication was not restored. Any desired sign-in is a user-only recovery step. No credentials, cookies or account/profile settings were handled. The recorded video is playing again (read-only video state reported paused=false, time advancing near the beginning), but its original playback position is unknown. The player-only presentation was restored, followed by the initial 400 × 225 geometry, pinned/floating and 0/0 fullscreen flags, saved runtime snapshot, focus/cursor and workspaces. The temporary terminal is gone and plugin popup closed. Browser automation's temporary debugging banner was cancelled during cleanup.
+
+## Historical Quick Controls — 2026-10-03
+
+Outstanding live checks in this historical entry are superseded by the dated live acceptance record above, within its stated coverage and limits.
 
 The native menu, placement schematic, and controller commands pass 37 controller tests, plugin validation, QML lint with documented metadata warnings, and isolated QML rendering. Runtime checks cover accessible control roles/actions, disabled actions, dropdown state readback, and keyboard focus scrolling to Restore at a 320px height. The complete widget also loads in an isolated Wayland process with a fixture helper.
 

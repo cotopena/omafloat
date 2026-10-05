@@ -28,7 +28,7 @@ def read_clients():
 
 def notify(message):
     try:
-        subprocess.run(["notify-send", "OmaFloat", message], check=False, timeout=4)
+        subprocess.run(["notify-send", "OmaPeek", message], check=False, timeout=4)
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -65,7 +65,7 @@ def raise_script(client):
     return (f"local w = hl.get_window({win}); "
             f"if not w or w.pid ~= {lua(client['pid'])} or w.stable_id ~= {lua(stable)} "
             'then error("The floating window closed or changed identity", 0) end; '
-            'if not w.mapped or not w.floating or w.workspace.name == "special:omafloat-hidden" then return end; '
+            'if not w.mapped or not w.floating or w.workspace.name == "special:omapeek-hidden" then return end; '
             f'local r = hl.dispatch(hl.dsp.window.alter_zorder({{window={win},mode="top"}})); '
             'if r and r.ok == false then error("window.alter_zorder: " .. tostring(r.error or r.code), 0) end')
 
@@ -147,8 +147,8 @@ def corner_geometry(monitor, width=600, corner="bottom-right"):
 class Controller:
     def __init__(self):
         runtime = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
-        # Preserve pre-OmaFloat restore state and locking during upgrades.
-        self.directory = runtime / "omarchy-float-video"
+        # Session state and locking are private to this plugin.
+        self.directory = runtime / "omapeek"
         self.directory.mkdir(mode=0o700, exist_ok=True)
         signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "default")
         session = hashlib.sha256(signature.encode()).hexdigest()[:12]
@@ -224,14 +224,14 @@ class Controller:
                     raise RuntimeError(f"{reason}. YouTube is still hidden; choose Restore original window "
                                        "again or close that browser window.") from error
                 self.clear()
-                raise RuntimeError(f"{reason}. OmaFloat released the YouTube window; arrange it manually.") from error
+                raise RuntimeError(f"{reason}. OmaPeek released the YouTube window; arrange it manually.") from error
             state["restore_failed"] = True
             self.save(state)
             raise RuntimeError(f"{reason}. Choose Restore original window again to release the window as it is.") from error
 
     def unhide(self, original):
         """Best effort: True once the window is gone or off the hidden workspace."""
-        hidden = lambda c: c is not None and c["workspace"]["name"] == "special:omafloat-hidden"
+        hidden = lambda c: c is not None and c["workspace"]["name"] == "special:omapeek-hidden"
         try:
             current = matching_window(original, read_clients())
             if not hidden(current):
@@ -371,7 +371,7 @@ class Controller:
         except RuntimeError:
             target = None
         options = (state or {}).get("options", {})
-        return dict(active=live is not None, hidden=bool(live and live["workspace"]["name"] == "special:omafloat-hidden"),
+        return dict(active=live is not None, hidden=bool(live and live["workspace"]["name"] == "special:omapeek-hidden"),
                     window=target, monitors=monitors, options=options,
                     follow=bool(live and live.get("pinned")), above=options.get("above", True))
 
@@ -383,7 +383,7 @@ class Controller:
         options.setdefault("follow", live.get("pinned", True))
         options.setdefault("above", True)
         monitors = json.loads(hypr("-j", "monitors"))
-        hidden = live["workspace"]["name"] == "special:omafloat-hidden"
+        hidden = live["workspace"]["name"] == "special:omapeek-hidden"
         destination = state.get("visible_destination", {})
         requested = getattr(args, "monitor", None)
         selected_name = requested or (destination.get("monitor_name") if hidden else None)
@@ -426,7 +426,7 @@ class Controller:
             self.save(state)
             if live["pinned"]:
                 dispatch("window.pin", window=win, action="disable")
-            dispatch("window.move", window=win, workspace="special:omafloat-hidden", follow=False)
+            dispatch("window.move", window=win, workspace="special:omapeek-hidden", follow=False)
             return
         pinned = live.get("pinned", False)
         if args.action == "show" or getattr(args, "monitor", None):
@@ -437,7 +437,7 @@ class Controller:
             workspace = (state.get("visible_destination", {}).get("workspace", state.get("visible_workspace", monitor["activeWorkspace"]))
                          if args.action == "show" and not options["follow"] else monitor["activeWorkspace"])
             if hidden and args.action != "show":
-                dispatch("window.move", window=win, workspace="special:omafloat-hidden", follow=False)
+                dispatch("window.move", window=win, workspace="special:omapeek-hidden", follow=False)
             else:
                 dispatch("window.move", window=win, workspace=workspace_selector(workspace), follow=False)
                 hidden = False
@@ -472,7 +472,7 @@ class Controller:
                     if args.action == "maintain":
                         return 0
                     if time.monotonic() >= deadline:
-                        raise RuntimeError("OmaFloat is busy. Try again shortly.")
+                        raise RuntimeError("OmaPeek is busy. Try again shortly.")
                     time.sleep(0.025)
             clients = read_clients()
             saved = self.load()
@@ -525,7 +525,7 @@ def main():
             print(json.dumps({"active": False, "error": str(error)}))
         else:
             if args.action != "maintain":
-                notify(str(error) or "OmaFloat could not complete that action.")
+                notify(str(error) or "OmaPeek could not complete that action.")
             print(str(error), file=sys.stderr)
         return 1
 
