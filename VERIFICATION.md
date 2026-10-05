@@ -6,6 +6,8 @@ Renamed the product, repository references, plugin ID, IPC target, QML component
 
 Rename checks: all 46 controller tests, plugin validation, whitespace checks, and isolated full-widget loading pass. QML lint completes with the previously documented dynamic-type metadata warnings.
 
+The installed copy was migrated to `io.github.cotopena.omapeek` through the standard Git plugin installation path. The bar placement and existing shortcut were preserved, and the old installation/configuration/runtime directory were backed up under `~/.local/state/omapeek/backups/`. The new IPC target reports version `0.4.0`; plugin discovery shows OmaPeek enabled with no old plugin ID. `hyprctl reload` and `hyprctl configerrors` pass. This migration performed no browser or keyboard-input testing.
+
 ## Live acceptance — 2026-10-05, df353ad
 
 Tested the installed plugin against Hyprland 0.56.2 and the existing Chromium YouTube app on two 1920 × 1080 displays (HDMI-A-1 and DP-1). Controller dispatches here were real, not mocks. Local evidence is retained in `/tmp/omafloat-live-20261005/`; captures include unrelated desktop content and are intentionally not published in the repository.
