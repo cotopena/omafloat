@@ -17,6 +17,7 @@ parser.add_argument('--monitor-height', type=int, default=1080)
 parser.add_argument('--runtime-check', action='store_true', help='Load the complete widget hidden on Wayland; no window dispatches')
 parser.add_argument('--focus-restore', action='store_true', help='Verify focus scrolls Restore into view')
 parser.add_argument('--accessibility-check', action='store_true', help='Assert actual control roles, names, state, actions and disabled guards')
+parser.add_argument('--keyboard-check', action='store_true', help='Deliver QtTest keys only to an offscreen fixture window')
 parser.add_argument('--lint', action='store_true')
 args = parser.parse_args()
 args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -29,6 +30,7 @@ with tempfile.TemporaryDirectory(prefix='omapeek-preview-') as temp:
         (base / 'qs' / module).symlink_to(Path('/usr/share/omarchy/shell') / module)
     for name in ('QuickControls.qml', 'OPeekIcon.qml', 'OmaPeekWidget.qml', 'OmaPeekPanel.qml', 'ControlsViewport.qml', 'OmaPeekButton.qml', 'OmaPeekToggle.qml', 'OmaPeekDropdown.qml'):
         (base / name).symlink_to(root / name)
+    (base / 'KeyboardChecks.qml').symlink_to(root / 'tests/KeyboardChecks.qml')
     (base / 'AccessibilityChecks.js').symlink_to(root / 'tests/AccessibilityChecks.js')
     if args.lint:
         raise SystemExit(subprocess.run(['/usr/lib/qt6/bin/qmllint', '-I', str(base),
@@ -83,6 +85,7 @@ ShellRoot {
         status: FIXTURE
       }
     }
+    Loader { id: keyboardChecks; active: @KEYBOARD@; source: "KeyboardChecks.qml" }
     Timer {
       interval: 900; running: @FOCUS@
       onTriggered: viewport.restoreControl.forceActiveFocus()
@@ -90,6 +93,10 @@ ShellRoot {
     Timer {
       interval: 1400; running: true
       onTriggered: {
+        if (@KEYBOARD@) {
+          try { keyboardChecks.item.run(viewport) }
+          catch (error) { console.error("KEYBOARD FAILED: " + error) }
+        }
         if (@ACCESSIBILITY@) {
           try { Checks.run(viewport) }
           catch (error) { console.error("ACCESSIBILITY FAILED: " + error) }
@@ -110,6 +117,7 @@ ShellRoot {
 }
 '''.replace('WIDTH', str(args.width)).replace('HEIGHT', str(args.height))
       .replace('FIXTURE', json.dumps(fixture)).replace('OUTPUT', json.dumps(str(args.output.resolve())))
+      .replace('@KEYBOARD@', 'true' if args.keyboard_check else 'false')
       .replace('@FOCUS@', 'true' if args.focus_restore else 'false')
       .replace('@ACCESSIBILITY@', 'true' if args.accessibility_check else 'false'))
     env = dict(os.environ, QT_QPA_PLATFORM='offscreen', QT_QUICK_BACKEND='software')
@@ -118,8 +126,10 @@ ShellRoot {
     print(result.stdout, end='')
     print(result.stderr, end='')
     result.check_returncode()
-    if 'ACCESSIBILITY FAILED' in result.stderr + result.stdout or 'FOCUS SCROLL FAILED' in result.stderr + result.stdout or 'Capture failed' in result.stderr + result.stdout:
+    if 'KEYBOARD FAILED' in result.stderr + result.stdout or 'ACCESSIBILITY FAILED' in result.stderr + result.stdout or 'FOCUS SCROLL FAILED' in result.stderr + result.stdout or 'Capture failed' in result.stderr + result.stdout:
         raise SystemExit('Preview verification failed')
+    if args.keyboard_check and 'KEYBOARD PASS:' not in result.stderr + result.stdout:
+        raise SystemExit('Keyboard checks did not complete')
     if not args.output.is_file():
         raise SystemExit('No screenshot produced')
     print(args.output)

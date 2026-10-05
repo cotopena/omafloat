@@ -129,6 +129,19 @@ def matching_window(saved, clients):
     return None
 
 
+def geometry_visible(monitor, at, size):
+    """Conservative reachability: any content overlap with logical usable bounds."""
+    scale = monitor.get("scale", 1)
+    width, height = monitor["width"], monitor["height"]
+    if monitor.get("transform", 0) % 2:
+        width, height = height, width
+    left, top, right, bottom = monitor.get("reserved", [0, 0, 0, 0])
+    x, y = monitor["x"] + left, monitor["y"] + top
+    far_x, far_y = monitor["x"] + width / scale - right, monitor["y"] + height / scale - bottom
+    return (at[0] < far_x and at[0] + size[0] > x
+            and at[1] < far_y and at[1] + size[1] > y)
+
+
 def corner_geometry(monitor, width=600, corner="bottom-right"):
     scale = monitor.get("scale", 1)
     w, h = monitor["width"], monitor["height"]
@@ -180,6 +193,7 @@ class Controller:
                         or not isinstance(state["monitor_name"], str)
                         or type(state["entered_fullscreen"]) is not bool
                         or type(state.get("restore_failed", False)) is not bool
+                        or type(state.get("recovery_pending", False)) is not bool
                         or not isinstance(options, dict)
                         or ("width" in options and (type(options["width"]) is not int or not 320 <= options["width"] <= 1200))
                         or ("corner" in options and options["corner"] not in {"top-left", "top-right", "bottom-left", "bottom-right"})
@@ -375,6 +389,60 @@ class Controller:
                     window=target, monitors=monitors, options=options,
                     follow=bool(live and live.get("pinned")), above=options.get("above", True))
 
+    def reconcile_visible(self, state, live, monitors, options):
+        """Recover only unreachable visible floats; never reapply normal placement."""
+        pending = state.get("recovery_pending", False)
+        current = next((m for m in monitors if m["id"] == live["monitor"]), None)
+        if (not live.get("floating") or live["workspace"]["name"] == "special:omapeek-hidden"
+                or (current is not None and not pending
+                    and any(geometry_visible(m, live["at"], live["size"]) for m in monitors))):
+            return
+        destination = state.get("visible_destination", {}) if pending else {}
+        previous = next((m for m in monitors if m["name"] == destination.get("monitor_name")), None)
+        monitor = previous or current or next((m for m in monitors if m.get("focused")), next(iter(monitors), None))
+        if monitor is None:
+            return  # Hotplug can briefly leave no outputs. Retry on the next maintenance.
+        # Compute before dispatch, so an unusably small output cannot leave a partial move.
+        x, y, w, h = corner_geometry(monitor, options["width"], options["corner"])
+        workspace = (destination["workspace"] if previous else
+                     live["workspace"] if current and not pending else monitor["activeWorkspace"])
+        win = selector(live)
+        # Journal recovery intent before dispatch. A monitor move may make the
+        # window reachable before a later operation fails; pending must still
+        # finish the workspace/pin/geometry steps on retry.
+        state.pop("visible_geometry", None)
+        state["visible_destination"] = {"monitor_name": monitor["name"], "workspace": workspace}
+        state["recovery_pending"] = True
+        self.save(state)
+        pinned = live.get("pinned", False)
+        if current is None or pending:
+            # Follow-off keeps its workspace on an existing display. If the
+            # owning display disappeared, the survivor's active workspace is reachable.
+            # Hyprland cannot change pinning without an attached monitor.
+            # Attach first, silently, so recovery does not take keyboard focus.
+            if current is None and live["workspace"]["id"] == monitor["activeWorkspace"]["id"]:
+                # Reconnecting can leave monitor=-1 on the output's now-active
+                # workspace. Moving to that same workspace is a compositor no-op.
+                # Hop silently through a different workspace before attaching.
+                alternate = next((m["activeWorkspace"] for m in monitors
+                                  if m["activeWorkspace"]["id"] != live["workspace"]["id"]), None)
+                if alternate is None:
+                    workspaces = json.loads(hypr("-j", "workspaces"))
+                    stage = max([0, live["workspace"]["id"]] + [w["id"] for w in workspaces]) + 1
+                    alternate = {"id": stage, "name": str(stage)}
+                dispatch("window.move", window=win, workspace=workspace_selector(alternate), follow=False)
+            dispatch("window.move", window=win, monitor=monitor["name"], follow=False)
+            if pinned:
+                dispatch("window.pin", window=win, action="disable")
+                pinned = False
+            dispatch("window.move", window=win, workspace=workspace_selector(workspace), follow=False)
+        dispatch("window.resize", window=win, x=w, y=h, relative=False)
+        dispatch("window.move", window=win, x=x, y=y, relative=False)
+        if pinned != options["follow"]:
+            dispatch("window.pin", window=win, action="enable" if options["follow"] else "disable")
+        state.pop("recovery_pending", None)
+        self.save(state)
+
     def configure(self, state, live, args):
         # Original is immutable: every change remains recoverable by restore.
         options = dict(state.get("options", {}))
@@ -384,6 +452,11 @@ class Controller:
         options.setdefault("above", True)
         monitors = json.loads(hypr("-j", "monitors"))
         hidden = live["workspace"]["name"] == "special:omapeek-hidden"
+        if args.action == "maintain" or (args.action == "show" and not hidden):
+            self.reconcile_visible(state, live, monitors, options)
+            if options["above"] and not hidden and monitors:
+                raise_window(state["original"])
+            return
         destination = state.get("visible_destination", {})
         requested = getattr(args, "monitor", None)
         selected_name = requested or (destination.get("monitor_name") if hidden else None)
@@ -399,16 +472,12 @@ class Controller:
         if monitor is None:
             raise RuntimeError("The floating display is no longer connected. Restore the window.")
         win = selector(live)
-        if args.action == "show" and not hidden:
-            return
-        if args.action == "maintain":
-            if options["above"] and not hidden:
-                raise_window(state["original"])
-            return
         for key in ("width", "corner", "follow", "above"):
             value = getattr(args, key, None)
             if value is not None:
                 options[key] = value
+        # A deliberate placement/visibility command supersedes a pending rescue.
+        state.pop("recovery_pending", None)
         # Journal intent before dispatch: partial failures retain a restore path.
         state["options"] = options
         if stale or any(getattr(args, key, None) is not None for key in ("width", "corner", "monitor")):
@@ -446,8 +515,14 @@ class Controller:
         if args.action == "show" or any(getattr(args, key, None) is not None for key in ("width", "corner", "monitor")):
             x, y, w, h = corner_geometry(monitor, options["width"], options["corner"])
             if args.action == "show" and state.get("visible_geometry"):
-                x, y = state["visible_geometry"]["at"]
-                w, h = state["visible_geometry"]["size"]
+                saved = state["visible_geometry"]
+                if geometry_visible(monitor, saved["at"], saved["size"]):
+                    x, y = saved["at"]
+                    w, h = saved["size"]
+                else:
+                    # Same output name does not imply the same origin/scale/layout.
+                    state.pop("visible_geometry", None)
+                    self.save(state)
             dispatch("window.resize", window=win, x=w, y=h, relative=False)
             dispatch("window.move", window=win, x=x, y=y, relative=False)
         if options["above"] and not hidden:
