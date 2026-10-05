@@ -9,7 +9,9 @@ from pathlib import Path
 import re
 import tempfile
 import threading
+import os
 import shutil
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, call, patch
@@ -1153,6 +1155,46 @@ for (const above of [true, false]) {
                         self.assertIsNone(error)
                         self.assertNotIn("recovery_pending", self.controller.load())
                         self.assertEqual(self.controller.load()["original"], CLIENT)
+
+    def test_maintenance_budget_check_rejects_nonzero_fixture_exit(self):
+        # Fake quickshell prints markers and spawn logs that satisfy every case, then
+        # exits with FAKE_EXIT; only the exit code can make the check fail.
+        fake = f"""#!{sys.executable}
+import os, re, sys, time
+from pathlib import Path
+base = Path(sys.argv[sys.argv.index('-p') + 1])
+shell = (base / 'shell.qml').read_text()
+bars = shell.count('OmaPeekWidget {{')
+event = re.search(r'handleEvent\\(\\{{name: "([a-z0-9]+)"\\}}\\)', shell)
+start = time.time()
+spawns = ['maintain']
+if '.open()' in shell:
+    spawns += ['status'] * 3
+elif event and event.group(1) in ('monitorremovedv2', 'movewindowv2'):
+    spawns += ['status']
+with open(base / 'spawns.log', 'a') as log:
+    for name in spawns:
+        log.write('%.3f %s\\n' % (start + 0.5, name))
+print('INJECT %.3f' % start)
+print('FRESH ' + ','.join(['true'] * bars))
+sys.exit(int(os.environ.get('FAKE_EXIT', '0')))
+"""
+        with tempfile.TemporaryDirectory() as bindir:
+            path = Path(bindir) / "quickshell"
+            path.write_text(fake)
+            path.chmod(0o755)
+            for code in (0, 42):
+                with self.subTest(fake_exit=code):
+                    env = dict(fv.os.environ, PATH=bindir + os.pathsep + fv.os.environ.get("PATH", ""), FAKE_EXIT=str(code))
+                    result = REAL_SUBPROCESS_RUN([sys.executable, str(ROOT / "tools/preview-qml.py"), "--maintenance-budget-check"],
+                                                 env=env, capture_output=True, text=True, timeout=60)
+                    output = result.stdout + result.stderr
+                    if code == 0:
+                        self.assertEqual(result.returncode, 0, output)
+                        self.assertIn("MAINTENANCE BUDGET PASS: 22 cases", output)
+                    else:
+                        self.assertNotEqual(result.returncode, 0, output)
+                        self.assertNotIn("MAINTENANCE BUDGET PASS", output)
 
     def test_invalid_state_is_ignored(self):
         for value in ("[1]", '{"version":2}', "broken"):

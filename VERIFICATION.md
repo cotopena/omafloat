@@ -17,9 +17,9 @@ Review of PR #5 found that automatic recovery moved windows by address without t
 
 Offline checks run on this change (no live compositor, browser, monitor or key injection):
 
-- `python3 -m unittest discover -s tests`: 63 tests pass. New Lua-executed recovery regressions cover replacement before the first command and between commands, Above on/off, unmapped/tiled/hidden windows with the same identity, nil workspace/monitor, a valid run, a failed command followed by a retry, and an unguarded `dispatch` that raises if recovery ever uses it. Existing mocked recovery tests now patch the guarded dispatcher.
+- `python3 -m unittest discover -s tests`: 64 tests pass. New Lua-executed recovery regressions cover replacement before the first command and between commands, Above on/off, unmapped/tiled/hidden windows with the same identity, nil workspace/monitor, a valid run, a failed command followed by a retry, and an unguarded `dispatch` that raises if recovery ever uses it. Existing mocked recovery tests now patch the guarded dispatcher.
 - The hotplug-handler test is skipped when Node.js is unavailable (`env -i PATH=/nonexistent /usr/bin/python3 -m unittest …`: skipped).
-- `python3 tools/preview-qml.py --maintenance-budget-check`: 22 cases pass. The same check against the 038c148 widget fails 16 cases (2–4 extra status spawns per event or tick).
+- `python3 tools/preview-qml.py --maintenance-budget-check`: 22 cases pass. The same check against the 038c148 widget fails 16 cases (2–4 extra status spawns per event or tick). The check also fails when the offscreen fixture exits non-zero, even after printing passing markers; a unit test drives it with a fake `quickshell` exiting 0 (passes) and 42 (rejected).
 - `--keyboard-check` at default height and `--height 320`: pass, 13 controls.
 - `py_compile`, `omarchy plugin validate .` and `git diff --check`: pass.
 

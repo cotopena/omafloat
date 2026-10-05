@@ -79,6 +79,7 @@ ShellRoot {{
                 env.pop(key, None)
             result = subprocess.run(['quickshell', '-p', str(base), '--no-color'], env=env,
                                     timeout=60, capture_output=True, text=True)
+            result.check_returncode()
             out = result.stdout + result.stderr
             start = [float(l.split('INJECT ')[1].split()[0]) for l in out.splitlines() if 'INJECT ' in l]
             fresh = [l.split('FRESH ')[1].strip().split(',') for l in out.splitlines() if 'FRESH ' in l]
