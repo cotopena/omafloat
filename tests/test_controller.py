@@ -12,7 +12,7 @@ import threading
 import shutil
 from types import SimpleNamespace
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import MagicMock, call, patch
 
 import subprocess
 REAL_SUBPROCESS_RUN = subprocess.run
@@ -77,6 +77,20 @@ class ControllerTests(unittest.TestCase):
         guard.start()
         self.addCleanup(guard.stop)
         self.controller = fv.Controller()
+
+    @contextlib.contextmanager
+    def tracked(self, side_effect=None):
+        """Patch guarded recovery dispatch; the mock records calls without the client.
+
+        The unguarded dispatcher raises, proving recovery never bypasses identity checks."""
+        inner = MagicMock(side_effect=side_effect)
+        def forward(client, method, **kwargs):
+            self.assertEqual((client["address"], client["pid"], client["stableId"]),
+                             (CLIENT["address"], CLIENT["pid"], CLIENT["stableId"]))
+            return inner(method, **kwargs)
+        with patch.object(fv, "dispatch_tracked", side_effect=forward), patch.object(
+                fv, "dispatch", side_effect=AssertionError("unguarded dispatch")):
+            yield inner
 
     def state(self, client=None):
         return dict(version=2, original=client or copy.deepcopy(CLIENT), monitor_name="DP-1",
@@ -577,7 +591,7 @@ class ControllerTests(unittest.TestCase):
             state = self.state()
             state["options"] = dict(above=above)
             live = dict(FLOATED, workspace=dict(id=-99, name="special:omapeek-hidden")) if hidden else FLOATED
-            with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(fv, "raise_window") as raise_win, patch.object(fv, "dispatch") as dsp:
+            with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(fv, "raise_window") as raise_win, self.tracked() as dsp:
                 self.controller.configure(state, live, self.configure_args("maintain"))
             self.assertEqual(raise_win.called, above and not hidden)
             dsp.assert_not_called()
@@ -592,8 +606,7 @@ class ControllerTests(unittest.TestCase):
                         state["options"] = dict(width=600, corner="top-left", follow=follow, above=above)
                         original = copy.deepcopy(state["original"])
                         options = copy.deepcopy(state["options"])
-                        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
-                                fv, "dispatch", side_effect=fake_dispatch(live)) as dsp, patch.object(fv, "raise_window") as raised:
+                        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), self.tracked(fake_dispatch(live)) as dsp, patch.object(fv, "raise_window") as raised:
                             self.controller.configure(state, live, self.configure_args(action))
                             count = len(dsp.call_args_list)
                             self.controller.configure(state, live, self.configure_args(action))
@@ -617,8 +630,7 @@ class ControllerTests(unittest.TestCase):
                             workspace=dict(id=7, name="7"))
                 state = self.state()
                 state["options"] = dict(width=800, corner="bottom-right", follow=False, above=False)
-                with patch.object(fv, "hypr", return_value=json.dumps([monitor])), patch.object(
-                        fv, "dispatch", side_effect=fake_dispatch(live)) as dsp:
+                with patch.object(fv, "hypr", return_value=json.dumps([monitor])), self.tracked(fake_dispatch(live)) as dsp:
                     self.controller.configure(state, live, self.configure_args("maintain"))
                 x, y, w, h = fv.corner_geometry(monitor, 800)
                 self.assertEqual((live["at"], live["size"]), ([x, y], [w, h]))
@@ -633,8 +645,7 @@ class ControllerTests(unittest.TestCase):
             with self.subTest(at=at):
                 live = dict(copy.deepcopy(FLOATED), at=at, size=[600, 338])
                 state = self.state()
-                with patch.object(fv, "hypr", return_value=json.dumps([MONITOR, other])), patch.object(
-                        fv, "dispatch") as dsp, patch.object(self.controller, "save") as save, patch.object(fv, "raise_window"):
+                with patch.object(fv, "hypr", return_value=json.dumps([MONITOR, other])), self.tracked() as dsp, patch.object(self.controller, "save") as save, patch.object(fv, "raise_window"):
                     self.controller.configure(state, live, self.configure_args("maintain"))
                 dsp.assert_not_called()
                 save.assert_not_called()
@@ -642,14 +653,13 @@ class ControllerTests(unittest.TestCase):
     def test_recovery_does_not_reveal_hidden_or_re_float_tiled_windows(self):
         for live in (dict(copy.deepcopy(FLOATED), at=[3500, 700], floating=False),
                      dict(copy.deepcopy(FLOATED), at=[3500, 700], workspace=dict(id=-99, name="special:omapeek-hidden"))):
-            with self.subTest(live=live), patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
-                    fv, "dispatch") as dsp, patch.object(self.controller, "save") as save, patch.object(fv, "raise_window"):
+            with self.subTest(live=live), patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), self.tracked() as dsp, patch.object(self.controller, "save") as save, patch.object(fv, "raise_window"):
                 self.controller.configure(self.state(), live, self.configure_args("maintain"))
             dsp.assert_not_called()
             save.assert_not_called()
 
     def test_maintenance_with_no_outputs_waits_without_mutation(self):
-        with patch.object(fv, "hypr", return_value="[]"), patch.object(fv, "dispatch") as dsp, patch.object(
+        with patch.object(fv, "hypr", return_value="[]"), self.tracked() as dsp, patch.object(
                 fv, "raise_window") as raised, patch.object(self.controller, "save") as save:
             self.controller.configure(self.state(), FLOATED, self.configure_args("maintain"))
         dsp.assert_not_called()
@@ -674,6 +684,7 @@ class ControllerTests(unittest.TestCase):
                 self.assertNotIn("visible_geometry", self.controller.load())
                 self.assertEqual(self.controller.load()["original"], CLIENT)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js needed to execute the QML event handler")
     def test_widget_hotplug_schedules_reconciliation_without_state_transition(self):
         # Execute the actual QML JavaScript handler with timer spies, no shell/compositor.
         widget = (ROOT / "OmaPeekWidget.qml").read_text()
@@ -729,8 +740,7 @@ for (const above of [true, false]) {
             if "workspace" in kwargs:
                 raise RuntimeError("workspace dispatch failed")
             fake_dispatch(live)(method, **kwargs)
-        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
-                fv, "dispatch", side_effect=fail_after_monitor_move), patch.object(fv, "raise_window"):
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), self.tracked(fail_after_monitor_move), patch.object(fv, "raise_window"):
             with self.assertRaisesRegex(RuntimeError, "workspace dispatch failed"):
                 self.controller.configure(state, live, self.configure_args("maintain"))
         self.assertEqual(calls, ["window.move", "window.pin", "window.move"])
@@ -739,8 +749,7 @@ for (const above of [true, false]) {
         # Model a monitor move that already made content visible before the
         # workspace failure. Pending recovery must still finish pin/placement.
         live["at"] = [100, 100]
-        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
-                fv, "dispatch", side_effect=fake_dispatch(live)), patch.object(fv, "raise_window") as raised:
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), self.tracked(fake_dispatch(live)), patch.object(fv, "raise_window") as raised:
             self.controller.configure(self.controller.load(), live, self.configure_args("maintain"))
         x, y, w, h = fv.corner_geometry(MONITOR)
         self.assertEqual((live["at"], live["size"], live["pinned"]), ([x, y], [w, h], True))
@@ -763,8 +772,7 @@ for (const above of [true, false]) {
                     if method == "window.move" and ("monitor" in kwargs or "workspace" in kwargs):
                         self.assertIs(kwargs.get("follow"), False, "Recovery must preserve focus")
                     effects(method, **kwargs)
-                with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
-                        fv, "dispatch", side_effect=dispatch) as dsp, patch.object(fv, "raise_window") as raised:
+                with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), self.tracked(dispatch) as dsp, patch.object(fv, "raise_window") as raised:
                     self.controller.configure(state, live, self.configure_args("maintain"))
                 self.assertEqual(dsp.call_args_list[0], call("window.move", window="address:0x123",
                                                            monitor="DP-1", follow=False))
@@ -804,8 +812,7 @@ for (const above of [true, false]) {
                         return json.dumps(monitors)
                     self.assertEqual(args, ("-j", "workspaces"))
                     return json.dumps([MONITOR["activeWorkspace"], dict(id=10, name="10")])
-                with patch.object(fv, "hypr", side_effect=hypr), patch.object(
-                        fv, "dispatch", side_effect=dispatch) as dsp, patch.object(fv, "raise_window") as raised:
+                with patch.object(fv, "hypr", side_effect=hypr), self.tracked(dispatch) as dsp, patch.object(fv, "raise_window") as raised:
                     self.controller.configure(state, live, self.configure_args("maintain"))
                 first = dsp.call_args_list[0]
                 self.assertEqual(first.args, ("window.move",))
@@ -835,14 +842,12 @@ for (const above of [true, false]) {
         live = dict(copy.deepcopy(FLOATED), at=[3500, 700], size=[600, 338])
         state = self.state()
         self.controller.save(state)
-        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
-                fv, "dispatch", side_effect=RuntimeError("output changing")), patch.object(fv, "raise_window"):
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), self.tracked(RuntimeError("output changing")), patch.object(fv, "raise_window"):
             with self.assertRaisesRegex(RuntimeError, "output changing"):
                 self.controller.configure(state, live, self.configure_args("maintain"))
         self.assertEqual(self.controller.load(), state)
         self.assertTrue(self.controller.load()["recovery_pending"])
-        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), patch.object(
-                fv, "dispatch", side_effect=fake_dispatch(live)), patch.object(fv, "raise_window"):
+        with patch.object(fv, "hypr", return_value=json.dumps([MONITOR])), self.tracked(fake_dispatch(live)), patch.object(fv, "raise_window"):
             self.controller.configure(self.controller.load(), live, self.configure_args("maintain"))
         x, y, w, h = fv.corner_geometry(MONITOR)
         self.assertEqual((live["at"], live["size"]), ([x, y], [w, h]))
@@ -1025,6 +1030,129 @@ for (const above of [true, false]) {
                         self.assertIn("closed or changed identity", lines[1])
                     elif name == "failed":
                         self.assertIn("window.alter_zorder: denied", lines[1])
+
+    RECOVERY_WINDOW = 'pid=42,stable_id=402653227,mapped=true,floating=true,workspace={name="3"},monitor={name="DP-1"}'
+
+    def run_recovery_lua(self, live, options, windows, monitors=(MONITOR,), fresh=True):
+        """Run maintain against generated Lua; windows[i] = (Lua fields, dispatch ok) for eval i."""
+        evals, mutations = [], []
+        def hypr(*args):
+            if args == ("-j", "monitors"):
+                return json.dumps(list(monitors))
+            if args == ("-j", "workspaces"):
+                return json.dumps([MONITOR["activeWorkspace"], dict(id=3, name="3")])
+            self.assertEqual(args[0], "eval")
+            fields, ok = windows[min(len(evals), len(windows) - 1)]
+            evals.append(args[1])
+            stub = ('local current=' + ('nil' if fields is None else '{' + fields + '}') + '; '
+                    'hl={get_window=function(s) assert(s=="address:0x123"); return current end, dsp={window={}}, '
+                    'dispatch=function(a) print("MUTATION "..a.kind); return {ok=' + ok + ',error="denied"} end}; '
+                    'for _,n in ipairs({"move","resize","pin","alter_zorder"}) do '
+                    'hl.dsp.window[n]=function(a) assert(a.window=="address:0x123"); a.kind=n; return a end end\n')
+            with patch.object(fv.subprocess, "run", wraps=REAL_SUBPROCESS_RUN):
+                result = subprocess.run([shutil.which("lua"), "-"], input=stub + args[1],
+                                        text=True, capture_output=True, timeout=2)
+            mutations.extend(line.split()[1] for line in result.stdout.splitlines() if line.startswith("MUTATION "))
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip())
+            return result.stdout
+        if fresh:
+            state = self.state()
+            state["options"] = dict(options)
+            self.controller.save(state)
+        error = None
+        # Recovery must never fall back to the unguarded dispatcher.
+        with patch.object(fv, "hypr", side_effect=hypr), patch.object(
+                fv, "dispatch", side_effect=AssertionError("unguarded dispatch")):
+            try:
+                self.controller.configure(self.controller.load(), copy.deepcopy(live), self.configure_args("maintain"))
+            except RuntimeError as exc:
+                error = exc
+        return mutations, error, evals
+
+    # No-monitor orphan (pinned, Follow on) and same-output layout shift (Follow off).
+    ORPHAN = dict(FLOATED, monitor=-1, at=[3500, 700], size=[600, 338], workspace=dict(id=3, name="3"))
+    ORPHAN_STEPS = ["move", "pin", "move", "resize", "move", "pin"]
+    SHIFTED = dict(FLOATED, at=[3500, 700], size=[600, 338], pinned=False)
+
+    def recovery_paths(self, above):
+        return (("orphan", self.ORPHAN, dict(width=600, corner="bottom-right", follow=True, above=above), self.ORPHAN_STEPS),
+                ("shifted", self.SHIFTED, dict(width=600, corner="bottom-right", follow=False, above=above), ["resize", "move"]))
+
+    @unittest.skipUnless(shutil.which("lua"), "Lua interpreter needed for compositor eval regression")
+    def test_recovery_eval_rejects_replacement_before_any_step(self):
+        replaced = self.RECOVERY_WINDOW.replace("pid=42", "pid=99").replace("402653227", "99")
+        for above in (True, False):
+            for name, live, options, _ in self.recovery_paths(above):
+                for current in (replaced, None):
+                    with self.subTest(above=above, path=name, current=current):
+                        mutations, error, _ = self.run_recovery_lua(live, options, [(current, "true")])
+                        self.assertEqual(mutations, [])
+                        self.assertIn("closed or changed identity", str(error))
+                        saved = self.controller.load()
+                        self.assertEqual(saved["original"], CLIENT)
+                        self.assertTrue(saved["recovery_pending"])
+
+    @unittest.skipUnless(shutil.which("lua"), "Lua interpreter needed for compositor eval regression")
+    def test_recovery_eval_stops_when_window_replaced_between_steps(self):
+        replaced = self.RECOVERY_WINDOW.replace("pid=42", "pid=99").replace("402653227", "99")
+        for above in (True, False):
+            options = dict(width=600, corner="bottom-right", follow=True, above=above)
+            for k in range(1, len(self.ORPHAN_STEPS)):
+                with self.subTest(above=above, k=k):
+                    windows = [(self.RECOVERY_WINDOW, "true")] * k + [(replaced, "true")]
+                    mutations, error, _ = self.run_recovery_lua(self.ORPHAN, options, windows)
+                    self.assertEqual(mutations, self.ORPHAN_STEPS[:k])
+                    self.assertIn("closed or changed identity", str(error))
+                    self.assertEqual(self.controller.load()["original"], CLIENT)
+                    self.assertTrue(self.controller.load()["recovery_pending"])
+
+    @unittest.skipUnless(shutil.which("lua"), "Lua interpreter needed for compositor eval regression")
+    def test_recovery_eval_rejects_ineligible_same_identity(self):
+        for above in (True, False):
+            for name, live, options, _ in self.recovery_paths(above):
+                for change in (("mapped=true", "mapped=false"), ("floating=true", "floating=false"),
+                               ('name="3"', 'name="special:omapeek-hidden"')):
+                    with self.subTest(above=above, path=name, change=change):
+                        current = self.RECOVERY_WINDOW.replace(*change)
+                        mutations, error, _ = self.run_recovery_lua(live, options, [(current, "true")])
+                        self.assertEqual(mutations, [])
+                        self.assertIn("no longer eligible for recovery", str(error))
+                        self.assertTrue(self.controller.load()["recovery_pending"])
+
+    @unittest.skipUnless(shutil.which("lua"), "Lua interpreter needed for compositor eval regression")
+    def test_recovery_eval_allows_nil_workspace_and_monitor(self):
+        detached = 'pid=42,stable_id=402653227,mapped=true,floating=true'
+        for name, live, options, steps in self.recovery_paths(False):
+            with self.subTest(path=name):
+                mutations, error, evals = self.run_recovery_lua(live, options, [(detached, "true")])
+                self.assertIsNone(error)
+                self.assertEqual(mutations, steps)
+                self.assertEqual(len(evals), len(steps))
+                self.assertTrue(all("w.stable_id ~= 402653227" in e and "no longer eligible" in e for e in evals))
+                self.assertNotIn("recovery_pending", self.controller.load())
+
+    @unittest.skipUnless(shutil.which("lua"), "Lua interpreter needed for compositor eval regression")
+    def test_recovery_eval_valid_run_and_failed_step_retry(self):
+        for above in (True, False):
+            for name, live, options, steps in self.recovery_paths(above):
+                with self.subTest(above=above, path=name):
+                    raised = ["alter_zorder"] if above else []
+                    mutations, error, _ = self.run_recovery_lua(live, options, [(self.RECOVERY_WINDOW, "true")])
+                    self.assertIsNone(error)
+                    self.assertEqual(mutations, steps + raised)
+                    self.assertNotIn("recovery_pending", self.controller.load())
+                    for k in range(len(steps)):
+                        windows = [(self.RECOVERY_WINDOW, "true")] * k + [(self.RECOVERY_WINDOW, "false")]
+                        mutations, error, _ = self.run_recovery_lua(live, options, windows)
+                        self.assertIn(": denied", str(error))
+                        self.assertEqual(mutations, steps[:k + 1])
+                        self.assertTrue(self.controller.load()["recovery_pending"])
+                        # Retry from the journal against a valid window completes and clears pending.
+                        _, error, _ = self.run_recovery_lua(live, options, [(self.RECOVERY_WINDOW, "true")], fresh=False)
+                        self.assertIsNone(error)
+                        self.assertNotIn("recovery_pending", self.controller.load())
+                        self.assertEqual(self.controller.load()["original"], CLIENT)
 
     def test_invalid_state_is_ignored(self):
         for value in ("[1]", '{"version":2}', "broken"):

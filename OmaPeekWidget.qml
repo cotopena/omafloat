@@ -156,11 +156,7 @@ BarWidget {
   Process {
     id: maintainProcess
     command: ["python3", root.helper, "maintain"]
-    onExited: {
-      root.refreshStatus()
-      root.broadcast("refreshStatus")
-      if (root.maintainPending) root.maintain()
-    }
+    onExited: if (root.maintainPending) root.maintain()
   }
   Timer { id: maintainTimer; interval: 200; onTriggered: root.maintain() }
   // Safety net for stacking and output geometry changes no event reports.

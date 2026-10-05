@@ -43,16 +43,19 @@ def lua(value):
     raise ValueError("Unsupported Lua argument")
 
 
-def dispatch(method, **args):
+def dispatch_script(method, **args):
     fields = ",".join(f"{key}={lua(value)}" for key, value in args.items())
     # hyprctl exits 0 for warning-level failures; raise them as Lua errors.
-    return hypr("eval", f"local r = hl.dispatch(hl.dsp.{method}({{{fields}}})); "
-                f"if r and r.ok == false then error({lua(method + ': ')} .. tostring(r.error or r.code), 0) end")
+    return (f"local r = hl.dispatch(hl.dsp.{method}({{{fields}}})); "
+            f"if r and r.ok == false then error({lua(method + ': ')} .. tostring(r.error or r.code), 0) end")
 
 
-def raise_script(client):
-    # Resolve and validate identity inside the same compositor eval as dispatch.
-    # Never use the legacy dispatcher, which can fall back to the focused window.
+def dispatch(method, **args):
+    return hypr("eval", dispatch_script(method, **args))
+
+
+def identity_script(client):
+    """Lua binding `w` to the client, failing unless its PID and stable ID still match."""
     win = lua(selector(client))
     stable = client.get("stableId")
     if (not isinstance(stable, str) or not re.fullmatch(r"[0-9a-fA-F]+", stable)
@@ -64,7 +67,14 @@ def raise_script(client):
         raise RuntimeError("Cannot safely identify the floating window.")
     return (f"local w = hl.get_window({win}); "
             f"if not w or w.pid ~= {lua(client['pid'])} or w.stable_id ~= {lua(stable)} "
-            'then error("The floating window closed or changed identity", 0) end; '
+            'then error("The floating window closed or changed identity", 0) end; ')
+
+
+def raise_script(client):
+    # Resolve and validate identity inside the same compositor eval as dispatch.
+    # Never use the legacy dispatcher, which can fall back to the focused window.
+    win = lua(selector(client))
+    return (identity_script(client) +
             'if not w.mapped or not w.floating or w.workspace.name == "special:omapeek-hidden" then return end; '
             f'local r = hl.dispatch(hl.dsp.window.alter_zorder({{window={win},mode="top"}})); '
             'if r and r.ok == false then error("window.alter_zorder: " .. tostring(r.error or r.code), 0) end')
@@ -72,6 +82,17 @@ def raise_script(client):
 
 def raise_window(client):
     return hypr("eval", raise_script(client))
+
+
+def dispatch_tracked(client, method, **args):
+    # Recovery runs unattended: re-check identity and eligibility in the same eval
+    # as each command, so a replaced or no longer eligible window is never moved.
+    # workspace/monitor may be nil while a display is disconnected.
+    return hypr("eval", identity_script(client) +
+                'local ws = w.workspace; '
+                'if not w.mapped or not w.floating or (ws and ws.name == "special:omapeek-hidden") '
+                'then error("The floating window is no longer eligible for recovery", 0) end; ' +
+                dispatch_script(method, **args))
 
 
 def selector(client):
@@ -404,6 +425,7 @@ class Controller:
             return  # Hotplug can briefly leave no outputs. Retry on the next maintenance.
         # Compute before dispatch, so an unusably small output cannot leave a partial move.
         x, y, w, h = corner_geometry(monitor, options["width"], options["corner"])
+        identity_script(live)  # Reject an unidentifiable window before journaling.
         workspace = (destination["workspace"] if previous else
                      live["workspace"] if current and not pending else monitor["activeWorkspace"])
         win = selector(live)
@@ -430,16 +452,16 @@ class Controller:
                     workspaces = json.loads(hypr("-j", "workspaces"))
                     stage = max([0, live["workspace"]["id"]] + [w["id"] for w in workspaces]) + 1
                     alternate = {"id": stage, "name": str(stage)}
-                dispatch("window.move", window=win, workspace=workspace_selector(alternate), follow=False)
-            dispatch("window.move", window=win, monitor=monitor["name"], follow=False)
+                dispatch_tracked(live, "window.move", window=win, workspace=workspace_selector(alternate), follow=False)
+            dispatch_tracked(live, "window.move", window=win, monitor=monitor["name"], follow=False)
             if pinned:
-                dispatch("window.pin", window=win, action="disable")
+                dispatch_tracked(live, "window.pin", window=win, action="disable")
                 pinned = False
-            dispatch("window.move", window=win, workspace=workspace_selector(workspace), follow=False)
-        dispatch("window.resize", window=win, x=w, y=h, relative=False)
-        dispatch("window.move", window=win, x=x, y=y, relative=False)
+            dispatch_tracked(live, "window.move", window=win, workspace=workspace_selector(workspace), follow=False)
+        dispatch_tracked(live, "window.resize", window=win, x=w, y=h, relative=False)
+        dispatch_tracked(live, "window.move", window=win, x=x, y=y, relative=False)
         if pinned != options["follow"]:
-            dispatch("window.pin", window=win, action="enable" if options["follow"] else "disable")
+            dispatch_tracked(live, "window.pin", window=win, action="enable" if options["follow"] else "disable")
         state.pop("recovery_pending", None)
         self.save(state)
 
