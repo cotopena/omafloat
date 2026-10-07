@@ -6,6 +6,10 @@ Keep a YouTube video in the corner while you work. Click the **OmaPeek icon** in
 
 No Chrome extension installation, account, API key, or browser profile setup is needed.
 
+![OmaPeek Quick Controls with size, display, corner, visibility, and restore controls](preview.png)
+
+*Quick Controls preview with sample window data. The monitor diagram illustrates placement rather than showing a live desktop capture.*
+
 ## Use it
 
 1. Open a video in the YouTube app or a Chromium window and start playback.
