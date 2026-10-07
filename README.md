@@ -6,9 +6,9 @@ Keep a YouTube video in the corner while you work. Click the **OmaPeek icon** in
 
 No Chrome extension installation, account, API key, or browser profile setup is needed.
 
-![OmaPeek Quick Controls with size, display, corner, visibility, and restore controls](preview.png)
+![A YouTube video floating in the bottom-right corner of an Omarchy desktop beside a separate Chromium window](docs/screenshots/omapeek-floating-video.png)
 
-*Quick Controls preview with sample window data. The monitor diagram illustrates placement rather than showing a live desktop capture.*
+*OmaPeek keeping a YouTube video in view while another browser window stays available.*
 
 ## Use it
 
@@ -23,6 +23,10 @@ Keep the YouTube window open. Closing it stops playback. This plugin shrinks the
 ### Quick Controls
 
 The popup shows the supported video window, its workspace, connected displays, and a schematic of its current geometry. Pick Small (400), Medium (600), or Large (800 pixels wide), a display, or any corner. Sizes are constrained to the display work area. The diagram is letterboxed to the display's logical aspect ratio; its quiet editor shapes are illustrative, not a live desktop capture. The video marker uses actual window position and size.
+
+![OmaPeek Quick Controls with size, display, corner, visibility, and restore controls](preview.png)
+
+*Quick Controls preview with sample window data. The monitor diagram illustrates placement rather than showing a live desktop capture.*
 
 **Hide float** parks the window on a dedicated special workspace without stopping playback. **Show float** returns it. If the display it was hidden from has been disconnected, Show uses the focused display and the selected corner. **Follow workspaces** pins the float on its display. **Keep above other windows** raises it whenever focus or windows change, with a check every 12 seconds as a fallback, while the widget runs. Hyprland has no independent always-above flag, so another floating window can briefly cover it until the next raise. Turning this off stops raising; floating windows still normally sit above tiled windows. Other monitors' fullscreen windows and compositor overlays are not overridden.
 
