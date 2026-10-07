@@ -22,6 +22,8 @@ The popup shows the supported video window, its workspace, connected displays, a
 
 **Hide float** parks the window on a dedicated special workspace without stopping playback. **Show float** returns it. If the display it was hidden from has been disconnected, Show uses the focused display and the selected corner. **Follow workspaces** pins the float on its display. **Keep above other windows** raises it whenever focus or windows change, with a check every 12 seconds as a fallback, while the widget runs. Hyprland has no independent always-above flag, so another floating window can briefly cover it until the next raise. Turning this off stops raising; floating windows still normally sit above tiled windows. Other monitors' fullscreen windows and compositor overlays are not overridden.
 
+While the widget runs, a visible float left with no monitor, or with no part inside any connected display's usable area, is moved silently to the selected corner of a connected display, keeping Follow. This also happens with Keep above off, which only controls raising. Floats still partly on a display keep their position, hidden floats stay hidden until Show, and Show uses the selected corner when the saved position is no longer on screen. Each recovery command re-checks the window's identity in the compositor first, so a replacement window is never moved. A failed recovery stays pending and is retried while the original window is still tracked; if that window closed, OmaPeek stops tracking it and discards its saved state on the next float or restore.
+
 Tab moves through controls, Enter/Space activates them, and Escape dismisses the popup. Dropdowns support arrow keys. Short popups scroll, including automatically revealing keyboard focus. Keyboard and IPC `toggle` retain the original float/restore behavior rather than toggling the menu.
 
 ### If fullscreen does not activate
@@ -114,7 +116,7 @@ python3 bin/omapeek hide
 python3 bin/omapeek show
 ```
 
-`status` returns the tracked/eligible window, monitor metadata, current visibility/pinning, and placement options without taking the mutation lock. User actions briefly wait for the controller lock (up to three seconds); background maintenance skips a busy lock. Mutations retain the original restoration snapshot; partial failures leave it available for retry, and a second consecutive failed restore releases the window. `maintain` is used by the running widget for stack-order enforcement.
+`status` returns the tracked/eligible window, monitor metadata, current visibility/pinning, and placement options without taking the mutation lock. User actions briefly wait for the controller lock (up to three seconds); background maintenance skips a busy lock. Mutations retain the original restoration snapshot; partial failures leave it available for retry, and a second consecutive failed restore releases the window. `maintain` is used by the running widget for stack-order enforcement and to recover visible floats left unreachable by display changes.
 
 See [the isolated preview guide](docs/PREVIEW.md) for QML validation and fixture screenshot generation. See [VERIFICATION.md](VERIFICATION.md) for the current test record.
 

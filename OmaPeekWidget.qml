@@ -110,7 +110,7 @@ BarWidget {
     if (menu.opened || root.owning) root.refreshStatus()
   }
 
-  readonly property bool maintaining: floatingVideo && details.above !== false && !details.hidden
+  readonly property bool maintaining: floatingVideo && !details.hidden
   property bool maintainPending: false
   // Floats started outside the widget arrive through the status refresh.
   onMaintainingChanged: if (maintaining) maintainTimer.restart()
@@ -122,18 +122,20 @@ BarWidget {
     maintainProcess.running = true
   }
 
+  function handleEvent(event) {
+    if (!event || !event.name) return
+    var name = String(event.name)
+    // Monitor hotplug adds/removes bar instances even if active/Above is unchanged.
+    if (["openwindow", "closewindow", "movewindowv2", "changefloatingmode", "pin", "fullscreen",
+        "monitoradded", "monitoraddedv2", "monitorremoved", "monitorremovedv2"].indexOf(name) !== -1) eventTimer.restart()
+    // Geometry recovery also runs with Above off; the controller decides whether to raise.
+    if (root.maintaining && ["activewindowv2", "openwindow", "changefloatingmode", "movewindowv2",
+        "workspacev2", "focusedmonv2", "fullscreen", "pin",
+        "monitoradded", "monitoraddedv2", "monitorremoved", "monitorremovedv2"].indexOf(name) !== -1) maintainTimer.restart()
+  }
   Connections {
     target: Hyprland
-    function onRawEvent(event) {
-      if (!event || !event.name) return
-      var name = String(event.name)
-      // Monitor hotplug adds or removes bar instances, which can move ownership.
-      if (["openwindow", "closewindow", "movewindowv2", "changefloatingmode", "pin", "fullscreen",
-          "monitoradded", "monitoraddedv2", "monitorremoved", "monitorremovedv2"].indexOf(name) !== -1) eventTimer.restart()
-      // Hyprland raises floating windows on focus or open, which can cover the video.
-      if (root.maintaining && ["activewindowv2", "openwindow", "changefloatingmode", "movewindowv2",
-          "workspacev2", "focusedmonv2", "fullscreen", "pin"].indexOf(name) !== -1) maintainTimer.restart()
-    }
+    function onRawEvent(event) { root.handleEvent(event) }
   }
 
   Timer {
@@ -157,7 +159,7 @@ BarWidget {
     onExited: if (root.maintainPending) root.maintain()
   }
   Timer { id: maintainTimer; interval: 200; onTriggered: root.maintain() }
-  // Safety net for stacking changes no event reports.
+  // Safety net for stacking and output geometry changes no event reports.
   Timer { interval: 12000; repeat: true; running: root.maintaining && root.owning; onTriggered: root.maintain() }
 
   IpcHandler {
@@ -167,7 +169,8 @@ BarWidget {
     function status(): string {
       var state = root.owner()
       var active = state.floatingVideo === true
-      return JSON.stringify({version: "0.4.0", active: active, label: active ? "Return video" : "Float video", iconOnly: true, busy: state.busy === true || root.busy})
+      return JSON.stringify({version: "0.4.0", active: active, label: active ? "Return video" : "Float video", iconOnly: true, busy: state.busy === true || root.busy,
+        hidden: state.details.hidden === true, above: state.details.above !== false, maintenanceEnabled: state.maintaining === true})
     }
   }
 
